@@ -77,11 +77,13 @@ gcc "$SHIM_SRC" -o "$SHIM_BIN"
 chmod +x "$SHIM_BIN"
 
 echo "=== [6/6] Test du shim ==="
-if "$SHIM_BIN" version 2>/dev/null | grep -q "Android Asset Packaging Tool"; then
-    echo "OK -> $("$SHIM_BIN" version)"
+# Note: aapt2 ecrit sa version sur stderr selon les versions -> on capture 2>&1.
+SHIM_OUT="$("$SHIM_BIN" version 2>&1 || true)"
+if echo "$SHIM_OUT" | grep -q "Android Asset Packaging Tool"; then
+    echo "OK -> $SHIM_OUT"
 else
     echo "ERREUR: le shim ne renvoie pas la version attendue."
-    echo "Sortie: $("$SHIM_BIN" version 2>&1 | head -3)"
+    echo "Sortie: $(echo "$SHIM_OUT" | head -3)"
     exit 1
 fi
 
