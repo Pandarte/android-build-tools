@@ -1,64 +1,65 @@
 # 🔨 android-build-tools
 
-**Compiler des APK Android en local sur ARM — Termux + proot + qemu, sans PC ni build cloud.**
+**Build Android APKs locally on ARM — Termux + proot + qemu, no PC, no cloud build.**
 
-Cette boîte à outils compile **n'importe quel projet Android/Gradle** (Android
-natif, Capacitor, React Native, Flutter) directement sur un téléphone ARM. Elle
-fournit aussi un petit serveur HTTP qui sert de back-end à l'application
-[APKforge](https://github.com/Pandarte/forge).
+> 🇬🇧 English &nbsp;•&nbsp; [🇫🇷 Français](README.fr.md)
+
+This toolkit builds **any Android/Gradle project** (native Android, Capacitor,
+React Native, Flutter) directly on an ARM phone. It also ships a small HTTP
+server that acts as the back-end for the
+[APKforge](https://github.com/Pandarte/forge) app.
 
 <p align="left">
-  <img alt="Plateforme" src="https://img.shields.io/badge/plateforme-Termux%20%2F%20Android%20ARM-3DDC84">
-  <img alt="Méthode" src="https://img.shields.io/badge/aapt2-x86%20via%20qemu-orange">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Termux%20%2F%20Android%20ARM-3DDC84">
+  <img alt="Method" src="https://img.shields.io/badge/aapt2-x86%20via%20qemu-orange">
   <img alt="Shell" src="https://img.shields.io/badge/shell-bash-4EAA25">
-  <img alt="Serveur" src="https://img.shields.io/badge/serveur-python3-3776AB">
+  <img alt="Server" src="https://img.shields.io/badge/server-python3-3776AB">
 </p>
 
 ---
 
-## Le problème résolu
+## The problem it solves
 
-Gradle a besoin de l'outil **aapt2** pour compiler les ressources Android. Sur un
-téléphone ARM, on se heurte à trois murs :
+Gradle needs the **aapt2** tool to compile Android resources. On an ARM phone,
+you hit three walls:
 
-1. L'aapt2 fourni par Termux est **trop vieux** : il ne lit pas l'`android.jar`
-   des API récentes (35, 36) → erreur `LoadedArsc.cpp ... entry offsets overlap`.
-2. L'aapt2 de Debian/Ubuntu (`apt install aapt`) tourne sur ARM mais est lui
-   aussi trop ancien (2.19) → même erreur sur les jar récents.
-3. L'aapt2 **récent** de Google n'existe **que pour x86** (pas de build
-   `linux-aarch64`) → `Exec format error` sur ARM.
+1. The aapt2 shipped by Termux is **too old**: it can't read the `android.jar`
+   of recent APIs (35, 36) → `LoadedArsc.cpp ... entry offsets overlap` error.
+2. The aapt2 from Debian/Ubuntu (`apt install aapt`) runs on ARM but is also too
+   old (2.19) → same error on recent jars.
+3. Google's **recent** aapt2 only exists for **x86** (no `linux-aarch64` build)
+   → `Exec format error` on ARM.
 
-**La solution** : exécuter l'aapt2 **x86 récent** via **qemu** (émulation x86 sur
-ARM). Avec deux subtilités :
+**The solution**: run the **recent x86 aapt2** through **qemu** (x86 emulation on
+ARM). Two subtleties:
 
-- `binfmt_misc` (exécution x86 transparente) est **absent** sur Android non-root :
-  on ne peut pas simplement « lancer » le binaire x86, il faut appeler qemu
-  explicitement.
-- Gradle **refuse un script shell** comme aapt2 (il exige un vrai binaire ELF).
-  On contourne avec un **shim** : un minuscule binaire ELF natif ARM qui ne fait
-  que relancer `qemu + aapt2-x86`. Ce shim est ensuite **injecté dans le .jar
-  aapt2 que Gradle conserve en cache**, ce qui évite la validation stricte de
-  l'option `aapt2FromMavenOverride`.
+- `binfmt_misc` (transparent x86 execution) is **absent** on non-rooted Android,
+  so you can't just "run" the x86 binary — you must call qemu explicitly.
+- Gradle **refuses a shell script** as aapt2 (it requires a real ELF binary). The
+  workaround is a **shim**: a tiny native ARM ELF binary that does nothing but
+  re-launch `qemu + aapt2-x86`. That shim is then **injected into the aapt2 .jar
+  that Gradle keeps in its cache**, which bypasses the strict validation of the
+  `aapt2FromMavenOverride` option.
 
-Chaîne complète :
+Full chain:
 
 ```
-Gradle ──▶ (cache) aapt2 = SHIM (ELF ARM) ──▶ qemu-x86_64 ──▶ aapt2 x86 récent ──▶ lit android.jar
+Gradle ──▶ (cache) aapt2 = SHIM (ARM ELF) ──▶ qemu-x86_64 ──▶ recent x86 aapt2 ──▶ reads android.jar
 ```
 
 ## Installation
 
-À faire une seule fois, depuis Termux :
+Do this once, from Termux:
 
 ```bash
-proot-distro login ubuntu          # entrer dans Ubuntu
+proot-distro login ubuntu          # enter Ubuntu
 bash ~/android-build-tools/setup-aapt2-qemu.sh
 ```
 
-Le setup installe qemu, gcc, le JDK, les libs x86 multiarch, télécharge l'aapt2
-x86 et compile le shim. Il est idempotent (relançable sans risque).
+The setup installs qemu, gcc, the JDK, the x86 multiarch libs, downloads the x86
+aapt2 and compiles the shim. It is idempotent (safe to re-run).
 
-Il faut aussi le **SDK Android** dans Ubuntu, s'il n'est pas déjà présent :
+You also need the **Android SDK** inside Ubuntu, if not already present:
 
 ```bash
 export ANDROID_HOME="$HOME/android-sdk"
@@ -72,159 +73,157 @@ yes | sdkmanager --licenses
 sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 ```
 
-(Adapter `android-36` / `build-tools;36.0.0` au compileSdk du projet visé.)
+(Adapt `android-36` / `build-tools;36.0.0` to the target project's compileSdk.)
 
-## Utilisation
+## Usage
 
-### Compiler depuis une URL git (tout-en-un)
+### Build from a git URL (all-in-one)
 
-`android-builder.sh` clone un dépôt, **détecte son type** (Flutter / Capacitor /
-React Native / Android natif), extrait ses besoins (compileSdk, AGP…), installe
-les plateformes SDK manquantes, prépare (`npm install` / `cap sync` / `pub get`)
-puis compile via la chaîne aapt2 + qemu.
-
-```bash
-proot-distro login ubuntu
-bash ~/android-build-tools/android-builder.sh https://github.com/utilisateur/projet
-```
-
-Options :
-
-```bash
-  --branch <nom>     # compiler une branche précise
-  --subdir <chemin>  # le projet est dans un sous-dossier (monorepo)
-  --task <tâche>     # défaut : assembleDebug ; ex : assembleRelease
-```
-
-Si le build échoue, l'outil s'arrête et affiche un **diagnostic des causes
-connues** plutôt que de tenter une correction à l'aveugle. Les dépôts clonés
-sont placés dans `~/android-builds/<nom>`.
-
-**Prérequis par type de projet :**
-
-- **Capacitor / React Native** : `nodejs` + `npm` (`apt install -y nodejs npm`,
-  ou via `setup-node.sh`).
-- **Flutter** : le SDK Flutter doit être installé dans Ubuntu
-  ([guide officiel](https://docs.flutter.dev/get-started/install/linux)).
-  L'outil le détecte et prévient s'il manque.
-- **Android natif** : rien de plus que la chaîne et le SDK Android.
-
-### Compiler un projet déjà sur disque
+`android-builder.sh` clones a repository, **detects its type** (Flutter /
+Capacitor / React Native / native Android), extracts its needs (compileSdk,
+AGP…), installs missing SDK platforms, prepares it (`npm install` / `cap sync` /
+`pub get`), then builds it through the aapt2 + qemu chain.
 
 ```bash
 proot-distro login ubuntu
-bash ~/android-build-tools/build-android-local.sh ~/mon-projet/android
+bash ~/android-build-tools/android-builder.sh https://github.com/user/project
 ```
 
-- Projet **Capacitor** : viser le sous-dossier `android`.
-- Projet **Android natif** : viser la racine (là où se trouve `gradlew`).
-- Tâche par défaut : `assembleDebug`. Pour une autre :
+Options:
+
+```bash
+  --branch <name>    # build a specific branch
+  --subdir <path>    # the project is in a subfolder (monorepo)
+  --task <task>      # default: assembleDebug ; e.g. assembleRelease
+```
+
+If the build fails, the tool stops and prints a **diagnosis of known causes**
+rather than guessing a fix. Cloned repositories go into `~/android-builds/<name>`.
+
+**Per-project-type prerequisites:**
+
+- **Capacitor / React Native**: `nodejs` + `npm` (`apt install -y nodejs npm`,
+  or via `setup-node.sh`).
+- **Flutter**: the Flutter SDK must be installed inside Ubuntu
+  ([official guide](https://docs.flutter.dev/get-started/install/linux)). The
+  tool detects it and warns if it's missing.
+- **Native Android**: nothing beyond the chain and the Android SDK.
+
+### Build a project already on disk
+
+```bash
+proot-distro login ubuntu
+bash ~/android-build-tools/build-android-local.sh ~/my-project/android
+```
+
+- **Capacitor** project: point at the `android` subfolder.
+- **Native Android** project: point at the root (where `gradlew` lives).
+- Default task: `assembleDebug`. For another:
   ```bash
-  bash ~/android-build-tools/build-android-local.sh ~/mon-projet/android assembleRelease
+  bash ~/android-build-tools/build-android-local.sh ~/my-project/android assembleRelease
   ```
 
-Le script patche le cache Gradle automatiquement, compile, et affiche le chemin
-de l'APK. Pour le récupérer côté téléphone :
+The script patches the Gradle cache automatically, builds, and prints the APK
+path. To pull it to the phone:
 
 ```bash
-cp <chemin.apk> /data/data/com.termux/files/home/storage/downloads/
+cp <path.apk> /data/data/com.termux/files/home/storage/downloads/
 ```
 
-(nécessite `termux-setup-storage` exécuté une fois côté Termux.)
+(requires `termux-setup-storage` run once on the Termux side.)
 
-### Workflow Capacitor complet
+### Full Capacitor workflow
 
-Pour transformer une app web en APK :
+To turn a web app into an APK:
 
 ```bash
-# dans le dossier du projet, côté Ubuntu :
+# inside the project folder, on the Ubuntu side:
 npm install
 npx cap sync android
 bash ~/android-build-tools/build-android-local.sh ./android
 ```
 
-### Serveur de build (back-end d'APKforge)
+### Build server (APKforge back-end)
 
-`buildserver.py` expose la chaîne via une petite API HTTP locale
-(`127.0.0.1:8765`), pilotée par l'application
-[APKforge](https://github.com/Pandarte/forge).
+`buildserver.py` exposes the chain via a small local HTTP API
+(`127.0.0.1:8765`), driven by the
+[APKforge](https://github.com/Pandarte/forge) app.
 
 ```bash
 proot-distro login ubuntu
-python3 ~/buildserver/buildserver.py        # ou : bash start-build-server.sh
+python3 ~/buildserver/buildserver.py        # or: bash start-build-server.sh
 ```
 
-## Dépannage
+## Troubleshooting
 
 **`Custom AAPT2 location does not point to an AAPT2 executable`**
-Un `aapt2FromMavenOverride` pointe sur le shim. Ne pas utiliser l'override : le
-script passe par le patch du cache. Vérifier :
+An `aapt2FromMavenOverride` points at the shim. Don't use the override: the
+script goes through the cache patch. Check:
 ```bash
-grep aapt2 ~/.gradle/gradle.properties   # ne doit RIEN afficher
+grep aapt2 ~/.gradle/gradle.properties   # must print NOTHING
 ```
 
-**`failed to load include path .../android.jar` ou `LoadedArsc.cpp`**
-Le cache Gradle a été restauré avec l'aapt2 x86 d'origine (shim écrasé). Relancer
-le build : le script re-patche automatiquement. Pour patcher à la main, voir la
-fonction `patch_gradle_cache` dans `build-android-local.sh`.
+**`failed to load include path .../android.jar` or `LoadedArsc.cpp`**
+The Gradle cache was restored with the original x86 aapt2 (shim overwritten).
+Re-run the build: the script re-patches automatically. To patch by hand, see the
+`patch_gradle_cache` function in `build-android-local.sh`.
 
 **`SDK location not found`**
-Variable d'environnement perdue (nouveau shell). Le script recrée
-`local.properties` ; vérifier que `~/android-sdk` existe.
+Environment variable lost (new shell). The script recreates `local.properties`;
+make sure `~/android-sdk` exists.
 
 **`No cached version available for offline mode`**
-Ne pas lancer avec `--offline` au premier build d'un projet : Gradle doit
-télécharger ses dépendances. Le script ne met pas `--offline` ; si on l'ajoute
-manuellement, le retirer pour le premier build.
+Don't run with `--offline` on a project's first build: Gradle must download its
+dependencies. The script doesn't pass `--offline`; if you add it manually, remove
+it for the first build.
 
 **`checkDebugAarMetadata ... requires compileSdk 36`**
-Une dépendance exige un compileSdk plus récent. Avec cette chaîne, on peut
-simplement **monter le compileSdk** (le shim lit tous les jar) :
+A dependency requires a newer compileSdk. With this chain, you can simply **raise
+the compileSdk** (the shim reads all jars):
 ```bash
 sdkmanager "platforms;android-36"
-# puis ajuster compileSdk/targetSdk dans variables.gradle (Capacitor)
-# ou build.gradle (Android natif)
+# then adjust compileSdk/targetSdk in variables.gradle (Capacitor)
+# or build.gradle (native Android)
 ```
 
-**Version d'aapt2 / AGP différente**
-Le setup télécharge l'aapt2 `8.13.0-13719691` (= AGP 8.13). Si un projet utilise
-un AGP très différent, Gradle voudra une autre version d'aapt2. Le shim lit
-n'importe quel jar, mais le **nom de version** du jar de cache doit correspondre.
-Le plus simple : aligner l'AGP du projet sur 8.13, ou éditer `AAPT2_VERSION` dans
-`setup-aapt2-qemu.sh` et le `:linux@jar` dans `build-android-local.sh`, puis
-relancer le setup.
+**Different aapt2 / AGP version**
+The setup downloads aapt2 `8.13.0-13719691` (= AGP 8.13). If a project uses a
+very different AGP, Gradle will want a different aapt2 version. The shim reads any
+jar, but the cache jar's **version name** must match. Easiest: align the
+project's AGP to 8.13, or edit `AAPT2_VERSION` in `setup-aapt2-qemu.sh` and the
+`:linux@jar` in `build-android-local.sh`, then re-run the setup.
 
-## Composants
+## Components
 
-| Élément              | Chemin                                          | Rôle                              |
+| Element              | Path                                            | Role                              |
 |----------------------|-------------------------------------------------|-----------------------------------|
-| aapt2 x86 récent     | `~/aapt2-x86/aapt2`                             | le vrai outil, exécuté via qemu   |
-| shim ELF ARM         | `~/aapt2-shim`                                  | pont Gradle → qemu                |
-| source du shim       | `~/aapt2-shim.c`                               | pour recompiler si besoin         |
-| backup jar d'origine | `~/.gradle/.../aapt2-*-linux.jar.x86.bak`       | pour revenir en arrière           |
+| recent x86 aapt2     | `~/aapt2-x86/aapt2`                             | the real tool, run via qemu       |
+| ARM ELF shim         | `~/aapt2-shim`                                  | Gradle → qemu bridge              |
+| shim source          | `~/aapt2-shim.c`                               | to recompile if needed            |
+| original jar backup  | `~/.gradle/.../aapt2-*-linux.jar.x86.bak`       | to roll back                      |
 
-## Scripts du dépôt
+## Repository scripts
 
-| Script                   | Rôle                                                        |
+| Script                   | Role                                                        |
 |--------------------------|-------------------------------------------------------------|
-| `setup-aapt2-qemu.sh`    | installe la chaîne complète (qemu, aapt2 x86, shim)         |
-| `android-builder.sh`     | clone depuis une URL git, détecte, prépare et compile       |
-| `build-android-local.sh` | patche le cache Gradle et compile un projet local           |
-| `detect-project.sh`      | détecte le type de projet (Flutter/Capacitor/RN/natif)      |
-| `patch-gradle-cache.sh`  | injecte le shim dans le jar aapt2 du cache Gradle           |
-| `setup-node.sh`          | installe Node.js / npm pour les projets web                 |
-| `buildserver.py`         | API HTTP locale, back-end de l'app APKforge                 |
-| `start-build-server.sh`  | démarre le serveur de build                                 |
+| `setup-aapt2-qemu.sh`    | installs the full chain (qemu, x86 aapt2, shim)            |
+| `android-builder.sh`     | clones from a git URL, detects, prepares and builds         |
+| `build-android-local.sh` | patches the Gradle cache and builds a local project         |
+| `detect-project.sh`      | detects the project type (Flutter/Capacitor/RN/native)      |
+| `patch-gradle-cache.sh`  | injects the shim into the cached aapt2 jar                   |
+| `setup-node.sh`          | installs Node.js / npm for web projects                     |
+| `buildserver.py`         | local HTTP API, back-end for the APKforge app               |
+| `start-build-server.sh`  | starts the build server                                     |
 
-## Performances et limites
+## Performance and limits
 
-C'est un montage à plusieurs couches (Termux → proot → qemu → shim → cache
-Gradle). C'est fonctionnel mais **plus lent qu'un build natif** (qemu émule
-chaque instruction d'aapt2) et plus fragile qu'un build cloud. Pour un usage
-rapide et fiable, GitHub Actions reste l'option de référence. Cette chaîne
-existe pour compiler **100 % en local**, y compris hors connexion.
+This is a multi-layer stack (Termux → proot → qemu → shim → Gradle cache). It
+works, but it's **slower than a native build** (qemu emulates every aapt2
+instruction) and more fragile than a cloud build. For fast, reliable use, GitHub
+Actions remains the reference option. This chain exists to build **100% locally**,
+including offline.
 
-## Projets liés
+## Related projects
 
-- [APKforge](https://github.com/Pandarte/forge) — l'interface Android qui pilote
-  cette chaîne via le serveur HTTP.
+- [APKforge](https://github.com/Pandarte/forge) — the Android interface that
+  drives this chain through the HTTP server.
