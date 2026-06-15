@@ -18,6 +18,10 @@
 # =============================================================================
 
 set -uo pipefail
+# Charge les messages bilingues (EN par defaut, FR si ABT_LANG=fr).
+_ABT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -f "$_ABT_DIR/lib-i18n.sh" ] && source "$_ABT_DIR/lib-i18n.sh"
+
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/detect-project.sh"
@@ -62,7 +66,7 @@ SHIM_BIN="$HOME/aapt2-shim"
 
 # --- 0. pre-checks -----------------------------------------------------------
 if [ ! -x "$SHIM_BIN" ]; then
-    echo "ERREUR: chaine aapt2+qemu absente. Lance d'abord :"
+    echo "$(t chain_missing)"
     echo "    bash $HERE/setup-aapt2-qemu.sh"
     exit 1
 fi
@@ -73,9 +77,9 @@ export ANDROID_HOME="$ANDROID_SDK"
 export PATH="$ANDROID_SDK/cmdline-tools/latest/bin:$ANDROID_SDK/platform-tools:$PATH"
 
 # --- 1. clone ----------------------------------------------------------------
-echo "=== [1] Clone de $URL ==="
+printf "$(t clone_step)\n" "$URL"
 if [ -d "$DEST/.git" ]; then
-    echo "Deja clone, mise a jour..."
+    echo "$(t already_cloned)"
     git -C "$DEST" pull --ff-only || echo "(pull ignore)"
 else
     if [ -n "$BRANCH" ]; then
@@ -86,57 +90,57 @@ else
 fi
 ROOT="$DEST"
 [ -n "$SUBDIR" ] && ROOT="$DEST/$SUBDIR"
-[ -d "$ROOT" ] || { echo "ERREUR: sous-dossier $SUBDIR introuvable"; exit 1; }
+[ -d "$ROOT" ] || { printf "$(t subdir_missing)\n" "$SUBDIR"; exit 1; }
 
 # --- 2. detection ------------------------------------------------------------
-echo "=== [2] Detection du type de projet ==="
+echo "$(t detect_step)"
 TYPE="$(detect_project_type "$ROOT")"
-echo "Type detecte : $TYPE"
+printf "$(t type_detected)\n" "$TYPE"
 if [ "$TYPE" = "unknown" ]; then
-    echo "AVERTISSEMENT: type non reconnu. On tente un build Gradle generique."
+    echo "$(t type_unknown)"
 fi
 
 GRADLE_DIR="$(find_gradle_dir "$ROOT" "$TYPE")"
-echo "Module Android : ${GRADLE_DIR:-<aucun>}"
+printf "$(t android_module)\n" "${GRADLE_DIR:-<none>}"
 
 # besoins
 COMPILE_SDK="$(extract_sdk "$ROOT" compileSdk)"
 TARGET_SDK="$(extract_sdk "$ROOT" targetSdk)"
 MIN_SDK="$(extract_sdk "$ROOT" minSdk)"
 AGP="$(extract_agp "$ROOT")"
-echo "Besoins extraits : compileSdk=${COMPILE_SDK:-?} targetSdk=${TARGET_SDK:-?} minSdk=${MIN_SDK:-?} AGP=${AGP:-?}"
+printf "$(t needs_extracted)\n" "${COMPILE_SDK:-?}" "${TARGET_SDK:-?}" "${MIN_SDK:-?}" "${AGP:-?}"
 
 # avertissement version aapt2 vs AGP
 SHIM_AGP="8.13"
 if [ -n "$AGP" ] && [[ "$AGP" != $SHIM_AGP* ]]; then
-    echo "NOTE: AGP du projet ($AGP) != version de l'aapt2 installe ($SHIM_AGP.x)."
-    echo "      Si le build echoue sur aapt2, voir README (section 'Version aapt2/AGP')."
+    printf "$(t agp_note)\n" "$AGP" "$SHIM_AGP"
+    echo "$(t agp_note2)"
 fi
 
 # --- 3. installation des plateformes SDK requises ----------------------------
-echo "=== [3] Installation des plateformes SDK manquantes ==="
+echo "$(t sdk_install_step)"
 if [ -d "$ANDROID_SDK" ]; then
     for sdk in $(list_required_sdks "$ROOT"); do
         if [ ! -d "$ANDROID_SDK/platforms/android-$sdk" ]; then
             echo "  -> platforms;android-$sdk"
             yes | sdkmanager "platforms;android-$sdk" >/dev/null 2>&1 || \
-                echo "     (echec install android-$sdk, on continue)"
+                printf "$(t sdk_install_fail)\n" "$sdk"
         fi
     done
 else
-    echo "ATTENTION: SDK Android absent ($ANDROID_SDK). Voir README pour l'installer."
+    printf "$(t sdk_absent)\n" "$ANDROID_SDK"
 fi
 
 # --- 4. preparation selon le type --------------------------------------------
-echo "=== [4] Preparation ($TYPE) ==="
+printf "$(t prepare_step)\n" "$TYPE"
 prepare_failed=0
 
 # pour capacitor/react-native, node est indispensable
 case "$TYPE" in
     capacitor|react-native)
         if ! command -v node >/dev/null 2>&1; then
-            echo "ERREUR: node introuvable dans Ubuntu."
-            echo "  Installe-le (une fois) :"
+            echo "$(t node_missing)"
+            echo "$(t install_once)"
             echo "    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash"
             echo "    export NVM_DIR=\"\$HOME/.nvm\"; . \"\$NVM_DIR/nvm.sh\"; nvm install 20"
             echo "    ln -sf \"\$(which node)\" /usr/local/bin/node"
@@ -159,7 +163,7 @@ case "$TYPE" in
             # essaie le cap local du projet, sinon le cap global
             ( cd "$ROOT" && npx cap sync android ) \
                 || ( cd "$ROOT" && cap sync android ) \
-                || echo "(cap sync a echoue ; on tente le build quand meme)"
+                || echo "$(t cap_sync_fail)"
         fi
         ;;
     react-native)
@@ -169,29 +173,29 @@ case "$TYPE" in
         if command -v flutter >/dev/null; then
             ( cd "$ROOT" && flutter pub get ) || prepare_failed=1
         else
-            echo "ERREUR: Flutter non installe dans Ubuntu."
-            echo "  Installe-le : https://docs.flutter.dev/get-started/install/linux"
-            echo "  (ou via 'snapd'/git clone du SDK flutter)."
+            echo "$(t flutter_missing)"
+            echo "$(t flutter_install)"
+            echo "$(t flutter_install2)"
             prepare_failed=1
         fi
         ;;
     android-native|unknown)
-        echo "Pas d'etape de preparation specifique."
+        echo "$(t no_prepare)"
         ;;
 esac
 fi
 
 if [ "$prepare_failed" = 1 ]; then
     echo
-    echo ">>> La preparation a echoue. Que veux-tu faire ?"
-    echo "    Regarde l'erreur ci-dessus. Causes frequentes : pas de reseau,"
-    echo "    node/flutter manquant, script postinstall du repo qui echoue."
-    echo "    Corrige puis relance, ou continue quand meme (le build dira)."
+    echo "$(t prepare_failed)"
+    echo "$(t prepare_failed2)"
+    echo "$(t prepare_failed3)"
+    echo "$(t prepare_failed4)"
     exit 2
 fi
 
 # --- 5. build via la chaine locale -------------------------------------------
-echo "=== [5] Build ==="
+echo "$(t build_step5)"
 if [ "$TYPE" = "flutter" ] && command -v flutter >/dev/null; then
     # Flutter pilote Gradle lui-meme ; on patche le cache puis flutter build.
     "$HERE/patch-gradle-cache.sh" || true
@@ -200,7 +204,7 @@ if [ "$TYPE" = "flutter" ] && command -v flutter >/dev/null; then
 else
     # Capacitor / RN / natif : on delegue a build-android-local.sh
     if [ -z "$GRADLE_DIR" ]; then
-        echo "ERREUR: aucun module gradle (gradlew) trouve. Build impossible."
+        echo "$(t no_gradlew)"
         exit 2
     fi
     bash "$HERE/build-android-local.sh" "$GRADLE_DIR" "$TASK"
@@ -210,24 +214,24 @@ fi
 # --- 6. resultat / diagnostic ------------------------------------------------
 echo
 if [ "${BUILD_RC:-1}" -eq 0 ]; then
-    echo "=== BUILD REUSSI ==="
+    echo "$(t build_success_hdr)"
     find "$ROOT" -path '*outputs*' -name '*.apk' -printf '  %p  (%s octets)\n' 2>/dev/null
     echo
-    echo "Copie vers Telechargements :"
+    echo "$(t copy_to_dl_label)"
     echo "  cp <chemin.apk> /data/data/com.termux/files/home/storage/downloads/"
 else
-    echo "=== BUILD ECHOUE (code $BUILD_RC) ==="
-    echo "Diagnostic rapide des causes connues :"
+    printf "$(t build_failed_hdr)\n" "$BUILD_RC"
+    echo "$(t diag_header)"
     LOG="$ROOT/build/reports/problems/problems-report.html"
-    echo " - 'failed to load include path .../android.jar' ou 'LoadedArsc' :"
-    echo "     le cache Gradle a ete restaure -> relance, le patch se refait."
-    echo " - 'checkDebugAarMetadata ... requires compileSdk N' :"
-    echo "     monte compileSdk a N (le shim lit tous les jar) + sdkmanager."
-    echo " - 'VANILLA_ICE_CREAM' / 'cannot find symbol' API 35 :"
-    echo "     le code exige compileSdk 35+ -> aligne compileSdk."
-    echo " - 'SDK location not found' : SDK absent, voir README."
+    echo "$(t diag_arsc)"
+    echo "$(t diag_arsc2)"
+    echo "$(t diag_compilesdk)"
+    echo "$(t diag_compilesdk2)"
+    echo "$(t diag_vanilla)"
+    echo "$(t diag_vanilla2)"
+    echo "$(t diag_sdkloc)"
     echo
-    echo ">>> Montre-moi l'erreur exacte (les ~30 dernieres lignes ci-dessus)"
-    echo "    et on decide ensemble du correctif."
+    echo "$(t show_exact_error)"
+    echo "$(t decide_fix)"
 fi
 exit "${BUILD_RC:-1}"

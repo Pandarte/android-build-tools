@@ -7,12 +7,16 @@
 # =============================================================================
 
 set -uo pipefail
+# Charge les messages bilingues (EN par defaut, FR si ABT_LANG=fr).
+_ABT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -f "$_ABT_DIR/lib-i18n.sh" ] && source "$_ABT_DIR/lib-i18n.sh"
+
 
 SHIM_BIN="$HOME/aapt2-shim"
 AAPT2_VERSION="${AAPT2_VERSION:-8.13.0-13719691}"
 GRADLEW="${1:-}"   # optionnel : un gradlew a utiliser pour le pre-telechargement
 
-[ -x "$SHIM_BIN" ] || { echo "ERREUR: shim absent ($SHIM_BIN). Lance setup-aapt2-qemu.sh"; exit 1; }
+[ -x "$SHIM_BIN" ] || { printf "$(t shim_missing)\n" "$SHIM_BIN"; exit 1; }
 command -v zip  >/dev/null || apt-get install -y zip  >/dev/null 2>&1
 command -v unzip >/dev/null || apt-get install -y unzip >/dev/null 2>&1
 
@@ -32,19 +36,19 @@ do_patch() {
           && rm -f "$jar" && zip -rq "$jar" . )
         rm -rf "$w"
         chmod 444 "$jar"
-        echo "  patche : $jar"
+        printf "$(t patched_jar)\n" "$jar"
         patched=$((patched+1))
     done
     [ "$patched" -gt 0 ]
 }
 
 if do_patch; then
-    echo "Cache Gradle : aapt2 = shim ARM (OK)."
+    echo "$(t cache_ok)"
     exit 0
 fi
 
 # pas en cache -> pre-telechargement
-echo "Jar aapt2 absent du cache, pre-telechargement..."
+echo "$(t jar_absent_predl)"
 PF=$(mktemp -d)
 cat > "$PF/build.gradle" <<EOF
 configurations { aapt2 }
@@ -59,12 +63,12 @@ if [ -n "$GRADLEW" ] && [ -x "$GRADLEW" ]; then
 elif command -v gradle >/dev/null; then
     gradle -p "$PF" fetch --no-daemon || true
 else
-    echo "ERREUR: pas de gradlew fourni ni de gradle systeme pour pre-telecharger."
+    echo "$(t no_gradlew_predl)"
     rm -rf "$PF"; exit 1
 fi
 rm -rf "$PF"
 
-do_patch && echo "Cache patche apres pre-telechargement." || {
-    echo "ECHEC: jar aapt2 introuvable meme apres pre-telechargement."
+do_patch && echo "$(t cache_patched_predl)" || {
+    echo "$(t jar_missing_predl)"
     exit 1
 }

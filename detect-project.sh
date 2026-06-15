@@ -5,6 +5,9 @@
 # Sourcé par android-builder.sh (definit des fonctions, n'execute rien seul).
 # =============================================================================
 
+_ABT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -f "$_ABT_DIR/lib-i18n.sh" ] && [ -z "$(type -t t)" ] && source "$_ABT_DIR/lib-i18n.sh"
+
 # Detecte le type de projet dans le dossier $1.
 # Echo l'un de : flutter | capacitor | react-native | android-native | unknown
 detect_project_type() {

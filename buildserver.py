@@ -33,6 +33,29 @@ PORT = int(os.environ.get("BUILD_SERVER_PORT", "8765"))
 # token optionnel : si defini (env BUILD_SERVER_TOKEN), l'app doit l'envoyer.
 TOKEN = os.environ.get("BUILD_SERVER_TOKEN", "")
 
+# --- localisation des messages serveur (EN par defaut, FR si demande) --------
+# La langue provient de l'en-tete X-Forge-Lang envoye par l'app APKforge, sinon
+# de la variable d'env ABT_LANG, sinon anglais.
+def _norm_lang(value):
+    v = (value or "").strip().lower()
+    return "fr" if v.startswith("fr") else "en"
+
+SERVER_MSG = {
+    "launch_error": {"en": "[server] launch error: {e}", "fr": "[serveur] erreur lancement: {e}"},
+    "finished":     {"en": "[server] finished: {status}", "fr": "[serveur] termine: {status}"},
+}
+
+def srv(key, lang, **kw):
+    table = SERVER_MSG.get(key, {})
+    txt = table.get(_norm_lang(lang), table.get("en", key))
+    return txt.format(**kw)
+
+def _script_env(lang):
+    """Environnement passe aux scripts shell, avec ABT_LANG propage."""
+    env = dict(os.environ)
+    env["ABT_LANG"] = _norm_lang(lang or os.environ.get("ABT_LANG", "en"))
+    return env
+
 # --- etat en memoire des jobs ------------------------------------------------
 JOBS = {}            # job_id -> dict(status, url, lines[], apk, started, ended)
 JOBS_LOCK = threading.Lock()
@@ -67,14 +90,14 @@ def run_build(jid):
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1,
+            text=True, bufsize=1, env=_script_env(job.get("lang")),
         )
         for line in proc.stdout:
             log(line)
         proc.wait()
         rc = proc.returncode
     except Exception as e:
-        log(f"[serveur] erreur lancement: {e}")
+        log(srv("launch_error", job.get("lang"), e=e))
         rc = 1
 
     # cherche l'APK produit
@@ -94,7 +117,7 @@ def run_build(jid):
         job["status"] = "success" if rc == 0 else "failed"
         job["apk"] = apk
         job["ended"] = time.time()
-    log(f"[serveur] termine: {job['status']}" + (f" apk={apk}" if apk else ""))
+    log(srv("finished", job.get("lang"), status=job["status"]) + (f" apk={apk}" if apk else ""))
 
 
 def chain_status():
@@ -115,6 +138,10 @@ class Handler(BaseHTTPRequestHandler):
         if not TOKEN:
             return True
         return self.headers.get("X-Build-Token", "") == TOKEN
+
+    def _ui_lang(self):
+        # Langue de l'UI APKforge, envoyee par l'app via X-Forge-Lang (ex: "fr").
+        return _norm_lang(self.headers.get("X-Forge-Lang", ""))
 
     def _send(self, code, obj, ctype="application/json"):
         body = obj if isinstance(obj, (bytes, bytearray)) else json.dumps(obj).encode()
@@ -204,6 +231,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "url required"})
             jid = new_job(url, body.get("branch", ""), body.get("subdir", ""),
                           body.get("task", "assembleDebug"))
+            JOBS[jid]["lang"] = self._ui_lang()
             threading.Thread(target=run_build, args=(jid,), daemon=True).start()
             return self._send(200, {"job_id": jid})
 
@@ -212,13 +240,15 @@ class Handler(BaseHTTPRequestHandler):
             with JOBS_LOCK:
                 JOBS[jid] = {"id": jid, "url": "(setup)", "status": "running",
                              "lines": [], "apk": None, "started": time.time(),
-                             "ended": None, "branch": "", "subdir": "", "task": ""}
+                             "ended": None, "branch": "", "subdir": "", "task": "",
+                             "lang": self._ui_lang()}
 
             def run_setup():
                 job = JOBS[jid]
                 try:
                     proc = subprocess.Popen(["bash", SETUP], stdout=subprocess.PIPE,
-                                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+                                            stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                            env=_script_env(job.get("lang")))
                     for line in proc.stdout:
                         with JOBS_LOCK:
                             job["lines"].append(line.rstrip("\n"))
@@ -226,7 +256,7 @@ class Handler(BaseHTTPRequestHandler):
                     rc = proc.returncode
                 except Exception as e:
                     with JOBS_LOCK:
-                        job["lines"].append(f"[serveur] {e}")
+                        job["lines"].append(srv("launch_error", job.get("lang"), e=e))
                     rc = 1
                 with JOBS_LOCK:
                     job["status"] = "success" if rc == 0 else "failed"

@@ -12,6 +12,10 @@
 # =============================================================================
 
 set -e
+# Charge les messages bilingues (EN par defaut, FR si ABT_LANG=fr).
+_ABT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -f "$_ABT_DIR/lib-i18n.sh" ] && source "$_ABT_DIR/lib-i18n.sh"
+
 
 TOOLS_DIR="$HOME/android-build-tools"
 AAPT2_VERSION="8.13.0-13719691"   # version de l'aapt2 x86 ; doit correspondre
@@ -20,26 +24,26 @@ AAPT2_DIR="$HOME/aapt2-x86"
 SHIM_SRC="$HOME/aapt2-shim.c"
 SHIM_BIN="$HOME/aapt2-shim"
 
-echo "=== [1/6] Verification qu'on est bien dans le proot Ubuntu ==="
+echo "$(t setup_step1)"
 if [ ! -f /etc/os-release ] || ! grep -qi ubuntu /etc/os-release; then
-    echo "ERREUR: ce script doit tourner DANS le proot Ubuntu (proot-distro login ubuntu)."
+    echo "$(t proot_only)"
     exit 1
 fi
 mkdir -p "$TOOLS_DIR"
 
-echo "=== [2/6] Installation des paquets (qemu, gcc, jdk, outils) ==="
+echo "$(t setup_pkgs)"
 apt-get update -y
 apt-get install -y --no-install-recommends \
     qemu-user build-essential gcc libc6-dev file wget unzip zip ca-certificates \
     openjdk-21-jdk-headless
 
-echo "=== [3/6] Activation multiarch x86 + libs pour qemu ==="
+echo "$(t setup_step3)"
 dpkg --add-architecture amd64
 apt-get update -y
 # libs minimales dont l'aapt2 x86 a besoin pour se charger sous qemu
 apt-get install -y libc6:amd64 libstdc++6:amd64 zlib1g:amd64
 
-echo "=== [4/6] Telechargement de l'aapt2 x86 de Google ($AAPT2_VERSION) ==="
+printf "$(t setup_dl_aapt2)\n" "$AAPT2_VERSION"
 mkdir -p "$AAPT2_DIR"
 if [ ! -f "$AAPT2_DIR/aapt2" ]; then
     cd /tmp
@@ -53,9 +57,9 @@ if [ ! -f "$AAPT2_DIR/aapt2" ]; then
     cp aapt2-x86-extract/aapt2 "$AAPT2_DIR/aapt2"
     chmod +x "$AAPT2_DIR/aapt2"
 fi
-echo "aapt2 x86 : $(file "$AAPT2_DIR/aapt2" 2>/dev/null | cut -d, -f1-2 || echo "binaire telecharge")"
+echo "aapt2 x86 : $(file "$AAPT2_DIR/aapt2" 2>/dev/null | cut -d, -f1-2 || echo "$(t bin_downloaded)")"
 
-echo "=== [5/6] Compilation du shim ELF ARM (pont vers qemu) ==="
+echo "$(t setup_compile_shim)"
 cat > "$SHIM_SRC" <<EOF
 /* Shim ELF natif ARM. Gradle exige un vrai binaire ELF (il refuse un script
  * shell). Ce binaire ne fait que relancer l'aapt2 x86 via qemu, en passant
@@ -76,23 +80,23 @@ EOF
 gcc "$SHIM_SRC" -o "$SHIM_BIN"
 chmod +x "$SHIM_BIN"
 
-echo "=== [6/6] Test du shim ==="
+echo "$(t setup_test_shim)"
 # Note: aapt2 ecrit sa version sur stderr selon les versions -> on capture 2>&1.
 SHIM_OUT="$("$SHIM_BIN" version 2>&1 || true)"
 if echo "$SHIM_OUT" | grep -q "Android Asset Packaging Tool"; then
     echo "OK -> $SHIM_OUT"
 else
-    echo "ERREUR: le shim ne renvoie pas la version attendue."
+    echo "$(t shim_bad_version)"
     echo "Sortie: $(echo "$SHIM_OUT" | head -3)"
     exit 1
 fi
 
 echo
 echo "============================================================"
-echo " Chaine installee avec succes."
+echo "$(t chain_installed)"
 echo "   aapt2 x86 : $AAPT2_DIR/aapt2"
 echo "   shim ARM  : $SHIM_BIN"
 echo
-echo " Pour builder un projet, utilise build-android-local.sh"
-echo " (il s'occupe de patcher le cache Gradle automatiquement)."
+echo "$(t use_build_local)"
+echo "$(t use_build_local2)"
 echo "============================================================"

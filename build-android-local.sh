@@ -24,6 +24,10 @@
 # =============================================================================
 
 set -e
+# Charge les messages bilingues (EN par defaut, FR si ABT_LANG=fr).
+_ABT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -f "$_ABT_DIR/lib-i18n.sh" ] && source "$_ABT_DIR/lib-i18n.sh"
+
 
 PROJECT_DIR="${1:?Usage: build-android-local.sh /chemin/projet [tache]}"
 GRADLE_TASK="${2:-assembleDebug}"
@@ -34,13 +38,13 @@ ANDROID_SDK="$HOME/android-sdk"
 
 # --- 1. verifications de la chaine -------------------------------------------
 if [ ! -x "$SHIM_BIN" ] || [ ! -x "$AAPT2_DIR/aapt2" ]; then
-    echo "ERREUR: chaine aapt2+qemu absente. Lance d'abord :"
+    echo "$(t chain_missing)"
     echo "    bash ~/android-build-tools/setup-aapt2-qemu.sh"
     exit 1
 fi
 if [ ! -f "$PROJECT_DIR/gradlew" ]; then
-    echo "ERREUR: pas de gradlew dans $PROJECT_DIR"
-    echo "(pour un projet Capacitor, vise le sous-dossier 'android')"
+    printf "$(t no_gradlew_dir)\n" "$PROJECT_DIR"
+    echo "$(t capacitor_hint)"
     exit 1
 fi
 
@@ -52,8 +56,8 @@ export PATH="$ANDROID_SDK/cmdline-tools/latest/bin:$ANDROID_SDK/platform-tools:$
 if [ -d "$ANDROID_SDK" ]; then
     echo "sdk.dir=$ANDROID_SDK" > "$PROJECT_DIR/local.properties"
 else
-    echo "ATTENTION: SDK Android introuvable a $ANDROID_SDK"
-    echo "Installe-le avec sdkmanager, ou ajuste ANDROID_SDK dans ce script."
+    printf "$(t sdk_not_found_dir)\n" "$ANDROID_SDK"
+    echo "$(t sdk_install_sdkman)"
 fi
 
 # --- 3. retire tout override aapt2 (on passe par le patch de cache) ----------
@@ -92,9 +96,9 @@ patch_gradle_cache() {
     [ "$patched" -gt 0 ]
 }
 
-echo "=== Patch du cache Gradle (1re tentative) ==="
+echo "$(t patch_attempt1)"
 if ! patch_gradle_cache; then
-    echo "Jar aapt2 pas encore en cache. Pre-telechargement..."
+    echo "$(t jar_not_cached)"
     # mini-projet qui force Gradle a telecharger le jar aapt2-linux
     PREFETCH=$(mktemp -d)
     AGP_AAPT2_VER=$(basename "$AAPT2_DIR" >/dev/null; echo "8.13.0-13719691")
@@ -107,27 +111,33 @@ EOF
     echo "rootProject.name='prefetch'" > "$PREFETCH/settings.gradle"
     "$PROJECT_DIR/gradlew" -p "$PREFETCH" fetch --no-daemon || true
     rm -rf "$PREFETCH"
-    patch_gradle_cache || echo "AVERTISSEMENT: jar toujours pas trouve, le build le revelera."
+    patch_gradle_cache || echo "$(t jar_still_missing)"
 fi
 
 # --- 5. build ----------------------------------------------------------------
-echo "=== Build : $GRADLE_TASK dans $PROJECT_DIR ==="
-echo "(patience sur processDebugResources : aapt2 tourne via qemu, c'est plus lent)"
+printf "$(t build_step)\n" "$GRADLE_TASK" "$PROJECT_DIR"
+echo "$(t aapt2_patience)"
 cd "$PROJECT_DIR"
 chmod +x gradlew
 
+# La sortie de Gradle (warnings, erreurs) reste en anglais pour rester lisible
+# a l'international, quelle que soit la langue de l'UI.
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+GRADLE_EN_OPTS="-Duser.language=en -Duser.country=US"
+
 # Si Gradle a restaure le jar entre-temps, on re-patche et on relance une fois.
-if ! ./gradlew "$GRADLE_TASK" --no-daemon; then
-    echo "=== Echec : re-patch du cache puis nouvelle tentative ==="
+if ! ./gradlew $GRADLE_EN_OPTS "$GRADLE_TASK" --no-daemon; then
+    echo "$(t build_retry)"
     patch_gradle_cache || true
-    ./gradlew "$GRADLE_TASK" --no-daemon
+    ./gradlew $GRADLE_EN_OPTS "$GRADLE_TASK" --no-daemon
 fi
 
 # --- 6. localisation de l'APK ------------------------------------------------
 echo
-echo "=== APK(s) produit(s) ==="
+echo "$(t apk_produced)"
 find "$PROJECT_DIR" -path '*outputs/apk*' -name '*.apk' -printf '%p  (%s octets)\n' 2>/dev/null || \
-    echo "Aucun .apk trouve (la tache '$GRADLE_TASK' n'en produit peut-etre pas)."
+    printf "$(t no_apk)\n" "$GRADLE_TASK"
 echo
-echo "Pour copier vers les Telechargements Termux :"
+echo "$(t copy_to_dl)"
 echo "  cp <chemin.apk> /data/data/com.termux/files/home/storage/downloads/"

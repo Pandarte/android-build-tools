@@ -9,12 +9,16 @@
 # =============================================================================
 
 set -u
+# Charge les messages bilingues (EN par defaut, FR si ABT_LANG=fr).
+_ABT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -f "$_ABT_DIR/lib-i18n.sh" ] && source "$_ABT_DIR/lib-i18n.sh"
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PORT="${BUILD_SERVER_PORT:-8765}"
 
 command -v python3 >/dev/null || { echo "python3 requis"; exit 1; }
 
-echo "Demarrage du serveur de build sur 127.0.0.1:$PORT"
+printf "$(t server_start)\n" "$PORT"
 echo "(Ctrl-C pour arreter)"
 exec python3 "$HERE/buildserver.py"
 
