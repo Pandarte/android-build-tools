@@ -18,6 +18,29 @@ server that acts as the back-end for the
 
 ---
 
+## Two build chains
+
+This toolkit ships **two** independent ways to build, for two situations:
+
+| Chain | Scripts | aapt2 | Speed | When to use |
+|-------|---------|-------|-------|-------------|
+| **proot + qemu** | `setup-aapt2-qemu.sh`, `build-android-local.sh`, `android-builder.sh` | Google x86 via qemu (in Ubuntu proot) | slower (emulated) | **compileSdk ≥ 35** (recent projects, incl. APKforge itself) |
+| **Termux-native** | `setup-termux-native.sh`, `build-termux-native.sh` | Termux ARM aapt2 (native) | fast (native) | **compileSdk ≤ 34** projects |
+
+Why two? Gradle needs `aapt2` to read the target API's `android.jar`. The aapt2
+packaged by Termux is a **native ARM binary** (fast, no emulation) but is built
+on an older Android base, so it can only read `android.jar` up to roughly API 34.
+Recent projects — anything pulling in `androidx.activity` ≥ 1.10 or Material 3
+Expressive — require **compileSdk 35+**, whose `android.jar` the Termux aapt2
+cannot load (`failed to load include path .../android.jar`). For those, the only
+option on ARM is Google's recent x86 aapt2 run through qemu — hence the proot
+chain.
+
+**Rule of thumb:** modern app (SDK 35/36) → proot+qemu chain. Older or simple app
+(SDK ≤ 34) → Termux-native chain, which is much faster. The day Termux updates its
+aapt2 to a newer Android base, the native chain will handle recent SDKs too and
+qemu can be retired.
+
 ## The problem it solves
 
 Gradle needs the **aapt2** tool to compile Android resources. On an ARM phone,
@@ -154,6 +177,23 @@ proot-distro login ubuntu
 python3 ~/buildserver/buildserver.py        # or: bash start-build-server.sh
 ```
 
+### Termux-native build (no proot, compileSdk ≤ 34)
+
+For projects targeting compileSdk 34 or lower, build natively in Termux — no
+proot, no qemu, full native speed. Run **from Termux** (not inside the proot):
+
+```bash
+bash ~/android-build-tools/setup-termux-native.sh                 # one time
+bash ~/android-build-tools/build-termux-native.sh <git-url|path>  # build
+```
+
+`setup-termux-native.sh` installs the JDK, the Android SDK and the **Termux
+native ARM aapt2** (`pkg install aapt2`), and points Gradle at it via
+`android.aapt2FromMavenOverride`. It verifies the binary actually runs (no
+`Exec format error`). If the build later fails with `failed to load include path
+.../android.jar`, the project's compileSdk is too recent for the Termux aapt2 —
+use the proot+qemu chain instead.
+
 ## Troubleshooting
 
 **`Custom AAPT2 location does not point to an AAPT2 executable`**
@@ -212,6 +252,9 @@ project's AGP to 8.13, or edit `AAPT2_VERSION` in `setup-aapt2-qemu.sh` and the
 | `detect-project.sh`      | detects the project type (Flutter/Capacitor/RN/native)      |
 | `patch-gradle-cache.sh`  | injects the shim into the cached aapt2 jar                   |
 | `setup-node.sh`          | installs Node.js / npm for web projects                     |
+| `setup-termux-native.sh` | sets up the native Termux chain (no proot, compileSdk ≤ 34) |
+| `build-termux-native.sh` | builds natively in Termux (no proot/qemu)                   |
+| `lib-i18n.sh`            | bilingual log messages (EN default, FR via `ABT_LANG`)      |
 | `buildserver.py`         | local HTTP API, back-end for the APKforge app               |
 | `start-build-server.sh`  | starts the build server                                     |
 
