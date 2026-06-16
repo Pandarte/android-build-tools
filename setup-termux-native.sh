@@ -151,13 +151,23 @@ else
     rm -rf "$_tmp_arm"
 fi
 
-echo "=== [6/6] Config Gradle (aapt2FromMavenOverride) ==="
+echo "=== [6/6] Config Gradle (aapt2 + memoire mobile) ==="
 mkdir -p "$(dirname "$GRADLE_PROPS")"
-# Retire une ancienne ligne d'override puis ajoute la bonne.
+# Retire les anciennes lignes gerees par ce script puis (re)ajoute les bonnes.
 if [ -f "$GRADLE_PROPS" ]; then
     sed -i '/android.aapt2FromMavenOverride/d' "$GRADLE_PROPS"
+    sed -i '/^org.gradle.jvmargs/d' "$GRADLE_PROPS"
 fi
 echo "android.aapt2FromMavenOverride=$AAPT2" >> "$GRADLE_PROPS"
+
+# Limite memoire pour mobile. CE fichier est dans GRADLE_USER_HOME (~/.gradle),
+# qui a PRIORITE sur le gradle.properties d'un projet : un projet qui demande
+# -Xmx4096m (frequent en Kotlin Multiplatform, ex. Grit) verra donc SA valeur
+# ecrasee par celle-ci. Sans ca, Android tue le process Gradle en cours de build
+# ("Gradle build daemon disappeared unexpectedly"). 2 Go de heap + metaspace
+# borne est un bon compromis pour un telephone ; baisse a 1536m si besoin.
+GRADLE_JVMARGS="${GRADLE_JVMARGS:--Xmx2048m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8}"
+echo "org.gradle.jvmargs=$GRADLE_JVMARGS" >> "$GRADLE_PROPS"
 
 # JAVA_HOME : sur Termux, le java du PATH suffit. On le calcule pour info.
 JAVA_HOME_DETECTED="$(dirname "$(dirname "$(command -v java)")")"

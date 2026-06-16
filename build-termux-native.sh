@@ -44,19 +44,19 @@ done
 # --- 1. Resoudre le projet (URL git ou chemin local) -------------------------
 if [ -d "$SRC" ]; then
     PROJECT_DIR="$SRC"
-    echo "=== [1] $(t apk_produced) : projet local $PROJECT_DIR ==="
+    printf "$(t local_project_step)\n" "$PROJECT_DIR"
 else
     NAME="$(basename "${SRC%.git}")"
     DEST="$BUILDS_DIR/$NAME"
     mkdir -p "$BUILDS_DIR"
     if [ -d "$DEST/.git" ]; then
-        echo "=== [1] $(t already_cloned) ==="
+        echo "$(t already_cloned)"
         git -C "$DEST" checkout -q -- . 2>/dev/null || true  # annule l'horodatage precedent
         git -C "$DEST" fetch --all -q || true
         [ -n "$BRANCH" ] && git -C "$DEST" checkout -q "$BRANCH" || true
         git -C "$DEST" pull -q || true
     else
-        printf "=== [1] $(t clone_step)\n" "$SRC"
+        printf "$(t clone_step)\n" "$SRC"
         if [ -n "$BRANCH" ]; then
             git clone -q --branch "$BRANCH" "$SRC" "$DEST"
         else
@@ -81,23 +81,7 @@ if [ ! -f "$PROJECT_DIR/gradlew" ]; then
 fi
 echo "sdk.dir=$ANDROID_HOME" > "$PROJECT_DIR/local.properties"
 
-# --- 3. Build natif ----------------------------------------------------------
-printf "$(t build_step)\n" "$TASK" "$PROJECT_DIR"
-cd "$PROJECT_DIR"
-chmod +x gradlew
-GRADLE_EN_OPTS="-Duser.language=en -Duser.country=US"
 
-# Avec aapt2 ARM natif (configure par setup-termux-native.sh), pas de qemu :
-# le build tourne a pleine vitesse.
-if ! ./gradlew $GRADLE_EN_OPTS "$TASK" --no-daemon; then
-    echo "$(t build_retry)"
-    echo "$(t diag_header)"
-    echo " - aapt2 override absent/incorrect -> relance setup-termux-native.sh"
-    echo " - binaire build-tools x86 (aidl/zipalign 'Syntax error: word unexpected')"
-    echo "   -> relance setup-termux-native.sh (il patche les binaires x86 en ARM)"
-    echo " - dependance exige compileSdk plus recent -> sdkmanager 'platforms;android-NN'"
-    exit 1
-fi
 
 # --- 4. Localiser l'APK ------------------------------------------------------
 echo
