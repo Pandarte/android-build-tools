@@ -3,102 +3,94 @@
 # setup-termux-native.sh
 #
 # Installe une chaine de compilation Android 100% NATIVE dans Termux :
-#   - PAS de proot, PAS d'Ubuntu, PAS de qemu, PAS de shim.
-#   - JDK ARM natif (Bionic) + Android SDK (cmdline-tools + build-tools ARM).
-#   - aapt2 ARM natif fourni par le build-tools, pointe directement a Gradle
-#     via android.aapt2FromMavenOverride.
+#   - PAS de proot, PAS d'Ubuntu/Debian, PAS de qemu, PAS de shim.
+#   - JDK ARM natif (Bionic) + Android SDK aarch64 (build-tools + platforms).
+#   - aapt2 ARM natif (build-tools 35.0.0 de lzhiyong/termux-ndk), pointe
+#     directement a Gradle via android.aapt2FromMavenOverride.
 #
 # C'est la voie rapide : aapt2 tourne en natif, plus aucune emulation.
-# L'ancienne chaine proot reste disponible en secours (setup-aapt2-qemu.sh).
+# L'ancienne chaine proot+qemu reste disponible en secours
+# (bootstrap-debian-build.sh / setup-aapt2-qemu.sh).
+#
+# IMPORTANT : le SDK officiel de Google installe un aapt2 *x86* sur ARM
+# (Exec format error). On utilise donc le SDK aarch64 precompile de
+# lzhiyong/termux-ndk, qui fournit un vrai aapt2 ARM + les plateformes
+# android-35 ET android-36.
 #
 # Usage (depuis Termux, PAS depuis le proot) :
 #   bash ~/android-build-tools/setup-termux-native.sh
 # =============================================================================
 set -uo pipefail
 
-# Charge les messages bilingues si presents (EN par defaut, FR si ABT_LANG=fr).
-_ABT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-[ -f "$_ABT_DIR/lib-i18n.sh" ] && source "$_ABT_DIR/lib-i18n.sh"
-# Repli si lib-i18n absent : t() renvoie son argument.
-type -t t >/dev/null 2>&1 || t() { printf '%s' "$1"; }
-
 PREFIX="/data/data/com.termux/files/usr"
 HOME_DIR="/data/data/com.termux/files/home"
 ANDROID_HOME="$HOME_DIR/android-sdk"
-CMDLINE_VERSION="11076708"   # command line tools (linux) ; fonctionne via le JDK
-PLATFORM="android-36"
-BUILD_TOOLS="36.0.0"
+BUILD_TOOLS="35.0.0"   # version fournie par le SDK aarch64 lzhiyong
+AAPT2="$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt2"
 GRADLE_PROPS="$HOME_DIR/.gradle/gradle.properties"
+SDK_ARCHIVE_URL="https://github.com/lzhiyong/termux-ndk/releases/download/android-sdk/android-sdk-aarch64.7z"
+SDK_ARCHIVE="$HOME_DIR/android-sdk-aarch64.7z"
 
-echo "=== [1/6] Refus du contexte proot ==="
+echo "=== [1/5] Refus du contexte proot ==="
 # Ce script DOIT tourner dans Termux natif. Si on est dans un proot, stop.
 if [ -n "${PROOT_L2S:-}" ] || grep -qi 'proot' /proc/self/status 2>/dev/null; then
-    echo "ERREUR / ERROR: lance ce script depuis Termux, PAS depuis le proot."
+    echo "ERREUR: lance ce script depuis Termux, PAS depuis le proot."
     exit 1
 fi
 
-echo "=== [2/6] Paquets Termux (jdk, wget, unzip) ==="
-pkg update -y && pkg install -y wget unzip openjdk-21 || {
-    echo "ERREUR / ERROR: installation des paquets Termux a echoue."; exit 1; }
+echo "=== [2/5] Paquets Termux (jdk, wget, p7zip) ==="
+pkg update -y && pkg install -y wget p7zip openjdk-21 || {
+    echo "ERREUR: installation des paquets Termux a echoue."; exit 1; }
 
-# JAVA_HOME pour Termux (openjdk est dans \$PREFIX/lib/jvm ou expose par pkg).
-export JAVA_HOME="$PREFIX/opt/openjdk"
-[ -d "$JAVA_HOME" ] || JAVA_HOME="$(dirname "$(dirname "$(command -v java)")")"
-
-echo "=== [3/6] Android SDK (cmdline-tools) ==="
-if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
-    mkdir -p "$ANDROID_HOME/cmdline-tools"
+echo "=== [3/5] SDK aarch64 (aapt2 ARM natif + platforms) ==="
+if [ -x "$AAPT2" ]; then
+    echo "  SDK aarch64 deja present, on saute le telechargement."
+else
     cd "$HOME_DIR"
-    wget -q -O cmdline-tools.zip \
-        "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_VERSION}_latest.zip" || {
-        echo "ERREUR / ERROR: telechargement cmdline-tools echoue."; exit 1; }
-    unzip -q cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
-    mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
-    rm -f cmdline-tools.zip
+    if [ ! -f "$SDK_ARCHIVE" ]; then
+        echo "  Telechargement du SDK aarch64 (~291 Mo)..."
+        wget -O "$SDK_ARCHIVE" "$SDK_ARCHIVE_URL" || {
+            echo "ERREUR: telechargement du SDK aarch64 echoue."; exit 1; }
+    fi
+    echo "  Extraction..."
+    7z x -y "$SDK_ARCHIVE" >/dev/null || {
+        echo "ERREUR: extraction du SDK aarch64 echouee."; exit 1; }
+    # On peut supprimer l'archive pour gagner de la place (commenter si on veut la garder).
+    rm -f "$SDK_ARCHIVE"
 fi
-export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
 
-echo "=== [4/6] Licences + plateforme + build-tools ==="
-# sdkmanager tourne avec le JDK Termux ; sur ARM il fournit l'aapt2 ARM natif.
-yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
-sdkmanager --sdk_root="$ANDROID_HOME" \
-    "platform-tools" "platforms;$PLATFORM" "build-tools;$BUILD_TOOLS" || {
-    echo "ERREUR / ERROR: sdkmanager a echoue (build-tools $BUILD_TOOLS indisponible ?)."
-    echo "  Essaie une version plus basse, ex: build-tools;34.0.0"
-    exit 1; }
-
-AAPT2="$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt2"
-
-echo "=== [5/6] Verification aapt2 ARM natif ==="
+echo "=== [4/5] Verification aapt2 ARM natif ==="
 if [ ! -x "$AAPT2" ]; then
-    echo "ERREUR / ERROR: aapt2 introuvable a $AAPT2"; exit 1
+    echo "ERREUR: aapt2 introuvable a $AAPT2 apres extraction."; exit 1
 fi
-ARCH_INFO="$(file "$AAPT2" 2>/dev/null || true)"
-echo "  $ARCH_INFO"
-if echo "$ARCH_INFO" | grep -qiE 'x86-64|x86_64|Intel'; then
-    echo "AVERTISSEMENT / WARNING: l'aapt2 fourni est x86, pas ARM."
-    echo "  Le build natif echouera. Reste sur la chaine proot (qemu) pour l'instant,"
-    echo "  ou installe une build-tools dont l'aapt2 est aarch64."
-    # On continue quand meme pour ecrire la config, l'utilisateur decidera.
+# Test fonctionnel : l'aapt2 doit repondre nativement (pas d'Exec format error).
+AAPT2_VER="$("$AAPT2" version 2>&1 || true)"
+if echo "$AAPT2_VER" | grep -q "Android Asset Packaging Tool"; then
+    echo "  OK -> $AAPT2_VER"
+else
+    echo "ERREUR: aapt2 ne repond pas nativement."
+    echo "  Sortie: $AAPT2_VER"
+    exit 1
 fi
 
-echo "=== [6/6] Config Gradle (aapt2FromMavenOverride) ==="
+echo "=== [5/5] Config Gradle (aapt2FromMavenOverride) ==="
 mkdir -p "$(dirname "$GRADLE_PROPS")"
 # Retire une ancienne ligne d'override puis ajoute la bonne.
 if [ -f "$GRADLE_PROPS" ]; then
     sed -i '/android.aapt2FromMavenOverride/d' "$GRADLE_PROPS"
 fi
 echo "android.aapt2FromMavenOverride=$AAPT2" >> "$GRADLE_PROPS"
-# Gradle/AGP recents : autorise l'override sans verification stricte si besoin.
-grep -q 'android.aapt2FromMavenIgnore' "$GRADLE_PROPS" 2>/dev/null || \
-    echo "android.aapt2FromMavenIgnore=true" >> "$GRADLE_PROPS"
+
+# JAVA_HOME : sur Termux, le java du PATH suffit. On le calcule pour info.
+JAVA_HOME_DETECTED="$(dirname "$(dirname "$(command -v java)")")"
 
 echo
 echo "============================================================"
-echo " Chaine Termux-native prete. / Termux-native chain ready."
-echo "   JAVA_HOME      = $JAVA_HOME"
+echo " Chaine Termux-native prete (sans qemu)."
 echo "   ANDROID_HOME   = $ANDROID_HOME"
 echo "   aapt2 (ARM)    = $AAPT2"
+echo "   platforms      = $(ls "$ANDROID_HOME/platforms" 2>/dev/null | tr '\n' ' ')"
 echo "   gradle.props   = $GRADLE_PROPS"
+echo "   java           = $JAVA_HOME_DETECTED"
 echo " Pour builder : bash ~/android-build-tools/build-termux-native.sh <url-git>"
 echo "============================================================"
