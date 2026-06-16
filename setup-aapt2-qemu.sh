@@ -2,13 +2,13 @@
 # =============================================================================
 # setup-aapt2-qemu.sh
 # Installe la chaîne complète permettant de compiler des projets Android/Gradle
-# en local sur un appareil ARM (Termux -> proot Ubuntu), en faisant tourner
+# en local sur un appareil ARM (Termux -> proot Ubuntu ou Debian), en faisant tourner
 # l'aapt2 x86 de Google via qemu.
 #
 # A LANCER UNE SEULE FOIS (ou pour reconstruire sur un système propre).
 # Idempotent : on peut le relancer sans casser quoi que ce soit.
 #
-# Prérequis : être DANS le proot Ubuntu (proot-distro login ubuntu), en root.
+# Prérequis : être DANS un proot Ubuntu ou Debian, en root.
 # =============================================================================
 
 set -e
@@ -25,7 +25,7 @@ SHIM_SRC="$HOME/aapt2-shim.c"
 SHIM_BIN="$HOME/aapt2-shim"
 
 echo "$(t setup_step1)"
-if [ ! -f /etc/os-release ] || ! grep -qi ubuntu /etc/os-release; then
+if [ ! -f /etc/os-release ] || ! grep -qiE "ubuntu|debian" /etc/os-release; then
     echo "$(t proot_only)"
     exit 1
 fi
