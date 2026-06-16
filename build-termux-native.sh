@@ -93,7 +93,8 @@ if ! ./gradlew $GRADLE_EN_OPTS "$TASK" --no-daemon; then
     echo "$(t build_retry)"
     echo "$(t diag_header)"
     echo " - aapt2 override absent/incorrect -> relance setup-termux-native.sh"
-    echo " - build-tools 36 indisponible -> essaie 34.0.0"
+    echo " - binaire build-tools x86 (aidl/zipalign 'Syntax error: word unexpected')"
+    echo "   -> relance setup-termux-native.sh (il patche les binaires x86 en ARM)"
     echo " - dependance exige compileSdk plus recent -> sdkmanager 'platforms;android-NN'"
     exit 1
 fi
