@@ -26,7 +26,8 @@ t() {
         chain_missing)        en="ERROR: aapt2+qemu chain missing. Run first:";                          fr="ERREUR: chaine aapt2+qemu absente. Lance d'abord :" ;;
         run_setup_hint)       en="    bash ~/android-build-tools/setup-aapt2-qemu.sh";                    fr="    bash ~/android-build-tools/setup-aapt2-qemu.sh" ;;
         clone_step)           en="=== [1] Cloning %s ===";                                                fr="=== [1] Clone de %s ===" ;;
-        already_cloned)       en="Already cloned, updating...";                                           fr="Deja clone, mise a jour..." ;;
+        already_cloned)       en="=== [1] Already cloned, updating... ===";                               fr="=== [1] Deja clone, mise a jour... ===" ;;
+        local_project_step)   en="=== [1] Local project: %s ===";                                         fr="=== [1] Projet local : %s ===" ;;
         subdir_missing)       en="ERROR: subfolder %s not found";                                         fr="ERREUR: sous-dossier %s introuvable" ;;
         detect_step)          en="=== [2] Detecting project type ===";                                    fr="=== [2] Detection du type de projet ===" ;;
         type_detected)        en="Detected type: %s";                                                     fr="Type detecte : %s" ;;
