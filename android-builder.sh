@@ -80,6 +80,7 @@ export PATH="$ANDROID_SDK/cmdline-tools/latest/bin:$ANDROID_SDK/platform-tools:$
 printf "$(t clone_step)\n" "$URL"
 if [ -d "$DEST/.git" ]; then
     echo "$(t already_cloned)"
+    git -C "$DEST" checkout -q -- . 2>/dev/null || true  # annule l'horodatage precedent
     git -C "$DEST" pull --ff-only || echo "(pull ignore)"
 else
     if [ -n "$BRANCH" ]; then
@@ -91,6 +92,12 @@ fi
 ROOT="$DEST"
 [ -n "$SUBDIR" ] && ROOT="$DEST/$SUBDIR"
 [ -d "$ROOT" ] || { printf "$(t subdir_missing)\n" "$SUBDIR"; exit 1; }
+
+# --- 1bis. Horodatage du versioning (versionName + versionCode) --------------
+# Rend chaque build unique et installable par-dessus le precedent.
+if [ -f "$_ABT_DIR/stamp-version.sh" ]; then
+    bash "$_ABT_DIR/stamp-version.sh" "$ROOT" "${SUBDIR:-app}" || true
+fi
 
 # --- 2. detection ------------------------------------------------------------
 echo "$(t detect_step)"

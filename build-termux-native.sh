@@ -51,6 +51,7 @@ else
     mkdir -p "$BUILDS_DIR"
     if [ -d "$DEST/.git" ]; then
         echo "=== [1] $(t already_cloned) ==="
+        git -C "$DEST" checkout -q -- . 2>/dev/null || true  # annule l'horodatage precedent
         git -C "$DEST" fetch --all -q || true
         [ -n "$BRANCH" ] && git -C "$DEST" checkout -q "$BRANCH" || true
         git -C "$DEST" pull -q || true
@@ -65,6 +66,13 @@ else
     PROJECT_DIR="$DEST"
 fi
 [ -n "$SUBDIR" ] && PROJECT_DIR="$PROJECT_DIR/$SUBDIR"
+
+# --- 1bis. Horodatage du versioning (versionName + versionCode) --------------
+# Rend chaque build unique et installable par-dessus le precedent.
+_STAMP_MODULE="${SUBDIR:-app}"
+if [ -f "$_ABT_DIR/stamp-version.sh" ]; then
+    bash "$_ABT_DIR/stamp-version.sh" "$PROJECT_DIR" "$_STAMP_MODULE" || true
+fi
 
 # --- 2. local.properties -----------------------------------------------------
 if [ ! -f "$PROJECT_DIR/gradlew" ]; then
