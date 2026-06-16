@@ -81,7 +81,42 @@ if [ ! -f "$PROJECT_DIR/gradlew" ]; then
 fi
 echo "sdk.dir=$ANDROID_HOME" > "$PROJECT_DIR/local.properties"
 
+# --- 3. Build natif ----------------------------------------------------------
+printf "$(t build_step)\n" "$TASK" "$PROJECT_DIR"
+cd "$PROJECT_DIR"
+chmod +x gradlew
+GRADLE_EN_OPTS="-Duser.language=en -Duser.country=US"
 
+# Garde-fou memoire pour mobile.
+# Si GRADLE_JVMARGS est fourni (par l'app APKforge via buildserver.py, ou en
+# variable d'env), on l'ecrit dans le gradle.properties GLOBAL (~/.gradle), qui
+# a PRIORITE sur le gradle.properties du projet. Cela ecrase un -Xmx ambitieux
+# (ex. Grit : -Xmx4096m) qui, sur telephone, fait tuer le process par Android
+# ("Gradle build daemon disappeared unexpectedly"). Sans GRADLE_JVMARGS, on
+# garde la valeur deja posee par setup-termux-native.sh.
+if [ -n "${GRADLE_JVMARGS:-}" ]; then
+    _GP="$HOME_DIR/.gradle/gradle.properties"
+    mkdir -p "$(dirname "$_GP")"
+    [ -f "$_GP" ] && sed -i '/^org.gradle.jvmargs/d' "$_GP"
+    echo "org.gradle.jvmargs=$GRADLE_JVMARGS" >> "$_GP"
+    echo "[server] heap Gradle force : $GRADLE_JVMARGS"
+fi
+
+# Limite le parallelisme pour borner le pic memoire (flag CLI fiable).
+# Surchargeable via GRADLE_WORKERS (1 si la RAM est encore trop juste).
+GRADLE_WORKERS="${GRADLE_WORKERS:-2}"
+
+if ! ./gradlew $GRADLE_EN_OPTS --max-workers="$GRADLE_WORKERS" "$TASK" --no-daemon; then
+    echo "$(t build_retry)"
+    echo "$(t diag_header)"
+    echo " - aapt2 override absent/incorrect -> relance setup-termux-native.sh"
+    echo " - binaire build-tools x86 (aidl/zipalign 'Syntax error: word unexpected')"
+    echo "   -> relance setup-termux-native.sh (il patche les binaires x86 en ARM)"
+    echo " - 'daemon disappeared' / build tue -> manque de RAM ; baisse la memoire"
+    echo "   dans APKforge, ou reessaie avec GRADLE_WORKERS=1"
+    echo " - dependance exige compileSdk plus recent -> sdkmanager 'platforms;android-NN'"
+    exit 1
+fi
 
 # --- 4. Localiser l'APK ------------------------------------------------------
 echo

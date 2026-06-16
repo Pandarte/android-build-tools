@@ -56,10 +56,16 @@ def srv(key, lang, **kw):
     txt = table.get(_norm_lang(lang), table.get("en", key))
     return txt.format(**kw)
 
-def _script_env(lang):
-    """Environnement passe aux scripts shell, avec ABT_LANG propage."""
+def _script_env(lang, mem=0):
+    """Environnement passe aux scripts shell, avec ABT_LANG propage.
+    Si mem (Mo) > 0, on fixe GRADLE_JVMARGS pour que build-termux-native.sh /
+    setup ecrive cette limite de heap (ecrase le -Xmx du projet)."""
     env = dict(os.environ)
     env["ABT_LANG"] = _norm_lang(lang or os.environ.get("ABT_LANG", "en"))
+    if mem and int(mem) > 0:
+        env["GRADLE_JVMARGS"] = (
+            f"-Xmx{int(mem)}m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8"
+        )
     return env
 
 # --- detection : un echec native justifie-t-il un fallback proot ? -----------
@@ -137,13 +143,16 @@ JOBS = {}            # job_id -> dict(status, url, lines[], apk, started, ended)
 JOBS_LOCK = threading.Lock()
 
 
-def new_job(url, branch, subdir, task):
+def new_job(url, branch, subdir, task, mem=0):
     jid = uuid.uuid4().hex[:12]
     with JOBS_LOCK:
         JOBS[jid] = {
             "id": jid, "url": url, "branch": branch, "subdir": subdir,
             "task": task, "status": "running", "lines": [], "apk": None,
             "started": time.time(), "ended": None,
+            # Heap Gradle en Mo demande par l'app (0 = laisser le defaut du
+            # gradle.properties global pose par setup-termux-native.sh).
+            "mem": int(mem) if mem else 0,
         }
     return jid
 
@@ -155,7 +164,7 @@ def _run_chain(job, cmd, log):
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1, env=_script_env(job.get("lang")),
+            text=True, bufsize=1, env=_script_env(job.get("lang"), job.get("mem", 0)),
         )
         for line in proc.stdout:
             log(line)
@@ -366,7 +375,8 @@ class Handler(BaseHTTPRequestHandler):
             if not url:
                 return self._send(400, {"error": "url required"})
             jid = new_job(url, body.get("branch", ""), body.get("subdir", ""),
-                          body.get("task", "assembleDebug"))
+                          body.get("task", "assembleDebug"),
+                          body.get("mem", 0))
             JOBS[jid]["lang"] = self._ui_lang()
             threading.Thread(target=run_build, args=(jid,), daemon=True).start()
             return self._send(200, {"job_id": jid})
