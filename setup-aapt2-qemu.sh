@@ -91,11 +91,41 @@ else
     exit 1
 fi
 
+# === Installation du SDK Android (platforms + build-tools) ====================
+# Sans le SDK, Gradle echoue avec 'SDK location not found'. On l'installe ici
+# pour que la chaine soit complete et reproductible d'un seul coup.
+ANDROID_SDK="$HOME/android-sdk"
+CMDLINE_VERSION="11076708"
+SDK_PLATFORM="android-36"
+SDK_BUILD_TOOLS="36.0.0"
+
+if [ ! -x "$ANDROID_SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+    echo "=== Installation du SDK Android (cmdline-tools) ==="
+    mkdir -p "$ANDROID_SDK/cmdline-tools"
+    cd "$HOME"
+    wget -q -O cmdline-tools.zip \
+        "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_VERSION}_latest.zip" || {
+        echo "ERREUR: telechargement cmdline-tools echoue."; exit 1; }
+    unzip -q cmdline-tools.zip -d "$ANDROID_SDK/cmdline-tools"
+    mv "$ANDROID_SDK/cmdline-tools/cmdline-tools" "$ANDROID_SDK/cmdline-tools/latest"
+    rm -f cmdline-tools.zip
+fi
+
+SDKMANAGER="$ANDROID_SDK/cmdline-tools/latest/bin/sdkmanager"
+echo "=== Licences + plateforme + build-tools ==="
+yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK" --licenses >/dev/null 2>&1 || true
+"$SDKMANAGER" --sdk_root="$ANDROID_SDK" \
+    "platform-tools" "platforms;$SDK_PLATFORM" "build-tools;$SDK_BUILD_TOOLS" || {
+    echo "ERREUR: sdkmanager a echoue (build-tools $SDK_BUILD_TOOLS indisponible ?)."
+    exit 1; }
+echo "SDK installe : $ANDROID_SDK"
+
 echo
 echo "============================================================"
 echo "$(t chain_installed)"
 echo "   aapt2 x86 : $AAPT2_DIR/aapt2"
 echo "   shim ARM  : $SHIM_BIN"
+echo "   SDK       : $ANDROID_SDK"
 echo
 echo "$(t use_build_local)"
 echo "$(t use_build_local2)"
