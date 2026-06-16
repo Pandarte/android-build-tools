@@ -96,6 +96,42 @@ def fallback_warranted(lines):
     return any(sig in blob for sig in CHAIN_ERROR_SIGNATURES)
 
 
+# --- installation a la volee du fallback Debian ------------------------------
+# Constantes pour le bootstrap (lance cote TERMUX, hors du proot).
+PREFIX_DIR = os.environ.get("PREFIX", "/data/data/com.termux/files/usr")
+BOOTSTRAP = os.path.join(TOOLS, "bootstrap-debian-build.sh")
+PROOT_DISTRO = os.path.join(PREFIX_DIR, "bin", "proot-distro")
+
+def debian_installable():
+    """True si on peut tenter d'installer Debian (script + proot-distro presents)."""
+    return os.path.exists(BOOTSTRAP) and os.path.exists(PROOT_DISTRO)
+
+def install_debian_fallback(log):
+    """Installe le proot Debian minimal a la volee. Renvoie True si succes.
+    N'est appele QUE lorsqu'un echec native est juge lie a la chaine."""
+    if not debian_installable():
+        log("[server] fallback Debian indisponible "
+            "(bootstrap-debian-build.sh ou proot-distro absent).")
+        return False
+    log("[server] installation du fallback Debian (une fois)...")
+    rc = 1
+    try:
+        proc = subprocess.Popen(
+            ["bash", BOOTSTRAP],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for line in proc.stdout:
+            log(line.rstrip("\n"))
+        rc = proc.wait()
+    except Exception as e:
+        log(f"[server] erreur installation Debian : {e}")
+        return False
+    if rc == 0 and os.path.isdir(DEBIAN_ROOTFS):
+        log("[server] fallback Debian installe.")
+        return True
+    log(f"[server] echec installation Debian (rc={rc}).")
+    return False
+
+
 # --- etat en memoire des jobs ------------------------------------------------
 JOBS = {}            # job_id -> dict(status, url, lines[], apk, started, ended)
 JOBS_LOCK = threading.Lock()
@@ -175,13 +211,20 @@ def run_build(jid):
         chain_used = "native"
         if rc == 0:
             do_proot = False
-        elif not proot_ok:
-            log("[server] echec native ; pas de proot disponible.")
-        elif fallback_warranted(run_lines):
+        elif not fallback_warranted(run_lines):
+            log("[server] echec du projet (pas la chaine) -> pas de bascule")
+        elif proot_ok:
             log("[server] echec lie a la chaine -> bascule sur le proot (qemu)")
             do_proot = True
         else:
-            log("[server] echec du projet (pas la chaine) -> pas de bascule")
+            # Echec lie a la chaine mais pas de proot : on l'installe a la volee,
+            # uniquement maintenant qu'on sait qu'il pourrait aider.
+            log("[server] echec lie a la chaine ; pas de proot -> installation a la volee")
+            if install_debian_fallback(log):
+                proot_ok = os.path.exists(BUILDER) and os.path.isdir(DEBIAN_ROOTFS)
+                do_proot = proot_ok
+            else:
+                log("[server] fallback Debian indisponible -> abandon")
     elif proot_ok:
         # Pas de chaine native : on va directement en proot.
         log("[server] chaine native absente -> proot directement")
