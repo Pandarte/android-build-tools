@@ -26,9 +26,15 @@ from urllib.parse import urlparse, parse_qs
 
 HOME = os.path.expanduser("~")
 TOOLS = os.path.join(HOME, "android-build-tools")
-BUILDER = os.path.join(TOOLS, "android-builder.sh")
+BUILDER = os.path.join(TOOLS, "android-builder.sh")          # chaine proot (qemu)
+NATIVE_BUILDER = os.path.join(TOOLS, "build-termux-native.sh")  # chaine native (sans qemu)
 SETUP = os.path.join(TOOLS, "setup-aapt2-qemu.sh")
+NATIVE_SETUP = os.path.join(TOOLS, "setup-termux-native.sh")
 SHIM = os.path.join(HOME, "aapt2-shim")
+NATIVE_AAPT2 = os.path.join(HOME, "android-sdk", "build-tools", "35.0.0", "aapt2")
+DEBIAN_ROOTFS = os.path.join(
+    os.environ.get("PREFIX", "/data/data/com.termux/files/usr"),
+    "var", "lib", "proot-distro", "containers", "debian")
 PORT = int(os.environ.get("BUILD_SERVER_PORT", "8765"))
 # token optionnel : si defini (env BUILD_SERVER_TOKEN), l'app doit l'envoyer.
 TOKEN = os.environ.get("BUILD_SERVER_TOKEN", "")
@@ -56,6 +62,40 @@ def _script_env(lang):
     env["ABT_LANG"] = _norm_lang(lang or os.environ.get("ABT_LANG", "en"))
     return env
 
+# --- detection : un echec native justifie-t-il un fallback proot ? -----------
+# On ne bascule QUE sur des erreurs liees a la CHAINE (aapt2/SDK/plateforme),
+# pas sur des erreurs du PROJET (Kotlin/Java cassent, deps introuvables) :
+# refaire en proot ne corrigerait pas un bug de code, ce serait du temps perdu.
+CHAIN_ERROR_SIGNATURES = (
+    "failed to load include path",        # aapt2 ne lit pas android.jar
+    "android.jar",                        # plateforme manquante/incompatible
+    "exec format error",                  # binaire mauvaise architecture
+    "res_table_type_type",                # crash aapt2 sur la table de ressources
+    "requires compilesdk",                # compileSdk trop recent pour le natif
+    "requires compile sdk",
+    "loadedarsc",                         # parsing arsc casse
+    "aapt2",                              # erreur generique aapt2 (linking)
+)
+# Signatures d'erreur PROJET : si presentes, NE PAS basculer (echec legitime).
+PROJECT_ERROR_SIGNATURES = (
+    "unresolved reference",
+    "could not resolve",
+    "could not find",
+    "compilation error",
+    "kotlin compilation",
+    "cannot find symbol",
+)
+
+def fallback_warranted(lines):
+    """True si l'echec native vient de la chaine (et pas du projet)."""
+    blob = "\n".join(lines).lower()
+    # Un signe clair d'erreur projet annule le fallback.
+    if any(sig in blob for sig in PROJECT_ERROR_SIGNATURES):
+        return False
+    # Sinon, on bascule si une signature de chaine est presente.
+    return any(sig in blob for sig in CHAIN_ERROR_SIGNATURES)
+
+
 # --- etat en memoire des jobs ------------------------------------------------
 JOBS = {}            # job_id -> dict(status, url, lines[], apk, started, ended)
 JOBS_LOCK = threading.Lock()
@@ -72,20 +112,9 @@ def new_job(url, branch, subdir, task):
     return jid
 
 
-def run_build(jid):
-    job = JOBS[jid]
-    cmd = ["bash", BUILDER, job["url"]]
-    if job["branch"]:
-        cmd += ["--branch", job["branch"]]
-    if job["subdir"]:
-        cmd += ["--subdir", job["subdir"]]
-    if job["task"]:
-        cmd += ["--task", job["task"]]
-
-    def log(line):
-        with JOBS_LOCK:
-            job["lines"].append(line.rstrip("\n"))
-
+def _run_chain(job, cmd, log):
+    """Lance une commande de build, streame le log, renvoie (rc, lines_de_ce_run)."""
+    start_idx = len(job["lines"])
     log(f"$ {' '.join(shlex.quote(c) for c in cmd)}")
     try:
         proc = subprocess.Popen(
@@ -99,34 +128,98 @@ def run_build(jid):
     except Exception as e:
         log(srv("launch_error", job.get("lang"), e=e))
         rc = 1
+    with JOBS_LOCK:
+        run_lines = list(job["lines"][start_idx:])
+    return rc, run_lines
 
-    # cherche l'APK produit
-    apk = None
+
+def _find_apk(url):
     repo_dir = os.path.join(HOME, "android-builds", os.path.basename(
-        job["url"].rstrip("/")).replace(".git", ""))
+        url.rstrip("/")).replace(".git", ""))
     for root, _dirs, files in os.walk(repo_dir):
         if "outputs" in root:
             for f in files:
                 if f.endswith(".apk"):
-                    apk = os.path.join(root, f)
-                    break
-        if apk:
-            break
+                    return os.path.join(root, f)
+    return None
 
+
+def run_build(jid):
+    job = JOBS[jid]
+
+    def log(line):
+        with JOBS_LOCK:
+            job["lines"].append(line.rstrip("\n"))
+
+    # Options communes a passer aux deux scripts.
+    opts = []
+    if job["branch"]:
+        opts += ["--branch", job["branch"]]
+    if job["subdir"]:
+        opts += ["--subdir", job["subdir"]]
+    if job["task"]:
+        opts += ["--task", job["task"]]
+
+    native_ok = os.path.exists(NATIVE_BUILDER) and os.access(NATIVE_AAPT2, os.X_OK)
+    proot_ok = os.path.exists(BUILDER) and os.path.isdir(DEBIAN_ROOTFS)
+
+    rc = 1
+    chain_used = None
+    do_proot = False   # decide-t-on de (re)tenter en proot ?
+
+    # --- 1) Tentative NATIVE (rapide, sans qemu) -----------------------------
+    if native_ok:
+        log("[server] chaine NATIVE (sans qemu)")
+        cmd = ["bash", NATIVE_BUILDER, job["url"]] + opts
+        rc, run_lines = _run_chain(job, cmd, log)
+        chain_used = "native"
+        if rc == 0:
+            do_proot = False
+        elif not proot_ok:
+            log("[server] echec native ; pas de proot disponible.")
+        elif fallback_warranted(run_lines):
+            log("[server] echec lie a la chaine -> bascule sur le proot (qemu)")
+            do_proot = True
+        else:
+            log("[server] echec du projet (pas la chaine) -> pas de bascule")
+    elif proot_ok:
+        # Pas de chaine native : on va directement en proot.
+        log("[server] chaine native absente -> proot directement")
+        do_proot = True
+    else:
+        log("[server] aucune chaine disponible (ni native ni proot).")
+
+    # --- 2) Build PROOT (robuste, fallback ou voie directe) ------------------
+    if do_proot:
+        log("[server] chaine PROOT (Debian + qemu)")
+        cmd = ["bash", BUILDER, job["url"]] + opts
+        rc, _ = _run_chain(job, cmd, log)
+        chain_used = "proot"
+
+    # --- 3) APK + statut -----------------------------------------------------
+    apk = _find_apk(job["url"])
     with JOBS_LOCK:
         job["status"] = "success" if rc == 0 else "failed"
         job["apk"] = apk
+        job["chain"] = chain_used
         job["ended"] = time.time()
-    log(srv("finished", job.get("lang"), status=job["status"]) + (f" apk={apk}" if apk else ""))
+    log(srv("finished", job.get("lang"), status=job["status"])
+        + (f" [{chain_used}]" if chain_used else "")
+        + (f" apk={apk}" if apk else ""))
 
 
 def chain_status():
     sdk = os.path.join(HOME, "android-sdk")
+    native_ready = os.path.exists(NATIVE_AAPT2) and os.access(NATIVE_AAPT2, os.X_OK)
+    proot_ready = os.path.isdir(DEBIAN_ROOTFS) and os.path.exists(BUILDER)
     return {
-        "chain_ready": os.path.exists(SHIM) and os.access(SHIM, os.X_OK),
-        "builder_present": os.path.exists(BUILDER),
+        # 'chain_ready' reste vrai si AU MOINS une chaine est utilisable.
+        "chain_ready": native_ready or proot_ready,
+        "native_ready": native_ready,    # chaine Termux native (aapt2 ARM, sans qemu)
+        "proot_ready": proot_ready,      # chaine proot Debian (qemu) en secours
+        "builder_present": os.path.exists(BUILDER) or os.path.exists(NATIVE_BUILDER),
         "sdk_present": os.path.isdir(sdk),
-        "shim": SHIM if os.path.exists(SHIM) else None,
+        "aapt2_native": NATIVE_AAPT2 if native_ready else None,
     }
 
 
@@ -246,7 +339,8 @@ class Handler(BaseHTTPRequestHandler):
             def run_setup():
                 job = JOBS[jid]
                 try:
-                    proc = subprocess.Popen(["bash", SETUP], stdout=subprocess.PIPE,
+                    setup_script = NATIVE_SETUP if os.path.exists(NATIVE_SETUP) else SETUP
+                    proc = subprocess.Popen(["bash", setup_script], stdout=subprocess.PIPE,
                                             stderr=subprocess.STDOUT, text=True, bufsize=1,
                                             env=_script_env(job.get("lang")))
                     for line in proc.stdout:
