@@ -1,6 +1,6 @@
 # 🔨 android-build-tools
 
-**Compiler des APK Android en local sur ARM — Termux + proot + qemu, sans PC ni build cloud.**
+**Compiler des APK Android en local sur ARM — natif Termux d'abord, proot + qemu en secours. Sans PC ni build cloud.**
 
 > [🇬🇧 English](README.md) &nbsp;•&nbsp; 🇫🇷 Français
 
@@ -19,29 +19,44 @@ fournit aussi un petit serveur HTTP qui sert de back-end à l'application
 
 ---
 
-## Deux chaînes de compilation
+## Deux chaînes : le natif d'abord, le proot en secours
 
-Cette boîte à outils propose **deux** façons indépendantes de compiler, pour deux
-situations :
+Cette boîte à outils propose **deux** façons de compiler. La chaîne **native**
+est celle par défaut ; la chaîne **proot + qemu** est un secours, installé et
+utilisé seulement en cas de besoin.
 
-| Chaîne | Scripts | aapt2 | Vitesse | Quand l'utiliser |
-|--------|---------|-------|---------|------------------|
-| **proot + qemu** | `setup-aapt2-qemu.sh`, `build-android-local.sh`, `android-builder.sh` | aapt2 x86 de Google via qemu (dans le proot Ubuntu) | plus lente (émulée) | **compileSdk ≥ 35** (projets récents, dont APKforge) |
-| **Termux-native** | `setup-termux-native.sh`, `build-termux-native.sh` | aapt2 ARM de Termux (natif) | rapide (natif) | projets en **compileSdk ≤ 34** |
+| Chaîne | Scripts | aapt2 | Vitesse | Rôle |
+|--------|---------|-------|---------|------|
+| **Termux-native** | `setup-termux-native.sh`, `build-termux-native.sh` | aapt2 ARM de Termux (natif) | rapide (natif) | **par défaut** — chaque build démarre ici |
+| **proot + qemu** | `bootstrap-debian-build.sh`, `setup-aapt2-qemu.sh`, `android-builder.sh`, `build-android-local.sh` | aapt2 x86 de Google via qemu (proot Debian) | plus lente (émulée) | **secours** — seulement si le natif échoue pour une raison de chaîne |
 
-Pourquoi deux ? Gradle a besoin d'`aapt2` pour lire l'`android.jar` de l'API
-ciblée. L'aapt2 fourni par Termux est un **binaire ARM natif** (rapide, sans
-émulation) mais construit sur une base Android plus ancienne : il ne lit
-l'`android.jar` que jusqu'à l'API 34 environ. Les projets récents — tout ce qui
-tire `androidx.activity` ≥ 1.10 ou Material 3 Expressive — exigent
-**compileSdk 35+**, dont l'aapt2 Termux ne sait pas charger l'`android.jar`
-(`failed to load include path .../android.jar`). Pour ceux-là, la seule option
-sur ARM est l'aapt2 x86 récent de Google passé par qemu — d'où la chaîne proot.
+Comment le serveur arbitre (`buildserver.py`) :
 
-**Règle simple :** app moderne (SDK 35/36) → chaîne proot+qemu. App ancienne ou
-simple (SDK ≤ 34) → chaîne Termux-native, bien plus rapide. Le jour où Termux met
-à jour son aapt2 vers une base Android plus récente, la chaîne native gérera
-aussi les SDK récents et qemu pourra être abandonné.
+1. Chaque build est tenté **nativement** d'abord (aapt2 ARM natif, sans qemu).
+2. S'il réussit → terminé. Rien d'autre n'est touché.
+3. S'il échoue, le serveur regarde **pourquoi**. Une erreur de projet (erreur
+   Kotlin, symbole manquant…) est rapportée telle quelle — le proot n'y
+   changerait rien, donc pas de bascule.
+4. Si l'échec est lié à la **chaîne** (p. ex. `failed to load include path
+   .../android.jar` parce que l'aapt2 Termux est trop ancien pour le compileSdk
+   du projet), le serveur bascule sur la chaîne proot + qemu. Si aucun proot
+   n'est encore installé, il **installe Debian à la demande**
+   (`bootstrap-debian-build.sh`) puis réessaie dedans.
+
+Pourquoi un secours ? Gradle a besoin d'`aapt2` pour lire l'`android.jar` de
+l'API ciblée. L'aapt2 fourni par Termux est un **binaire ARM natif** (rapide,
+sans émulation) mais construit sur une base Android plus ancienne : il ne lit
+l'`android.jar` que jusqu'à l'API 34 environ. Les projets en **compileSdk 35+**
+(p. ex. `androidx.activity` ≥ 1.10 ou Material 3 Expressive) ne peuvent pas être
+lus par l'aapt2 Termux. Pour ceux-là, la seule option sur ARM est l'aapt2 x86
+récent de Google passé par qemu — d'où la chaîne proot.
+
+**Effet net :** les projets simples ou anciens compilent vite, en natif, sans
+jamais toucher de proot. Les projets en SDK récent démarrent en natif, butent
+sur le mur de l'aapt2, et le serveur provisionne puis utilise le secours
+Debian + qemu de façon transparente. Le jour où Termux met à jour son aapt2 vers
+une base Android plus récente, la chaîne native couvrira aussi les SDK récents
+et le proot pourra être abandonné totalement.
 
 ## Le problème résolu
 
@@ -75,29 +90,32 @@ Gradle ──▶ (cache) aapt2 = SHIM (ELF ARM) ──▶ qemu-x86_64 ──▶ 
 
 ## Installation
 
-À faire une seule fois, depuis Termux :
+Tout se pilote depuis **Termux** (aucun proot nécessaire en usage normal).
+
+**Chaîne native (par défaut) :**
 
 ```bash
-proot-distro login ubuntu          # entrer dans Ubuntu
-bash ~/android-build-tools/setup-aapt2-qemu.sh
+bash ~/android-build-tools/setup-termux-native.sh
 ```
 
-Le setup installe qemu, gcc, le JDK, les libs x86 multiarch, télécharge l'aapt2
-x86 et compile le shim. Il est idempotent (relançable sans risque).
+Ceci installe le JDK, le SDK Android et l'**aapt2 ARM natif**, et configure
+Gradle pour l'utiliser. Idempotent. Après ça, tu peux compiler tout projet dont
+le compileSdk est supporté par l'aapt2 Termux (≈ API 34 et en dessous).
 
-Il faut aussi le **SDK Android** dans Ubuntu, s'il n'est pas déjà présent :
+**Secours Debian (optionnel, à la demande) :**
+
+Tu n'as normalement pas à l'installer toi-même — le serveur le provisionne
+automatiquement la première fois qu'un build natif échoue pour une raison de
+chaîne. Pour le mettre en place à l'avance malgré tout :
 
 ```bash
-export ANDROID_HOME="$HOME/android-sdk"
-mkdir -p "$ANDROID_HOME/cmdline-tools"
-cd /tmp
-wget -O cmd.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-unzip -q cmd.zip -d "$ANDROID_HOME/cmdline-tools"
-mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
-export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
-yes | sdkmanager --licenses
-sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+bash ~/android-build-tools/bootstrap-debian-build.sh
 ```
+
+Ceci installe un proot Debian **minimal** et y lance `setup-aapt2-qemu.sh`
+(qemu, gcc, JDK, libs x86 multiarch, aapt2 x86, le shim, et une seule plateforme
+SDK). Rien de superflu ; le proot reste au repos tant que les builds natifs
+réussissent.
 
 (Adapter `android-36` / `build-tools;36.0.0` au compileSdk du projet visé.)
 
@@ -111,7 +129,8 @@ les plateformes SDK manquantes, prépare (`npm install` / `cap sync` / `pub get`
 puis compile via la chaîne aapt2 + qemu.
 
 ```bash
-proot-distro login ubuntu
+# dans le proot Debian de secours (le serveur y entre automatiquement) :
+proot-distro login debian
 bash ~/android-build-tools/android-builder.sh https://github.com/utilisateur/projet
 ```
 
@@ -131,7 +150,7 @@ sont placés dans `~/android-builds/<nom>`.
 
 - **Capacitor / React Native** : `nodejs` + `npm` (`apt install -y nodejs npm`,
   ou via `setup-node.sh`).
-- **Flutter** : le SDK Flutter doit être installé dans Ubuntu
+- **Flutter** : le SDK Flutter doit être installé dans le proot Debian
   ([guide officiel](https://docs.flutter.dev/get-started/install/linux)).
   L'outil le détecte et prévient s'il manque.
 - **Android natif** : rien de plus que la chaîne et le SDK Android.
@@ -139,7 +158,7 @@ sont placés dans `~/android-builds/<nom>`.
 ### Compiler un projet déjà sur disque
 
 ```bash
-proot-distro login ubuntu
+proot-distro login debian
 bash ~/android-build-tools/build-android-local.sh ~/mon-projet/android
 ```
 
@@ -164,7 +183,7 @@ cp <chemin.apk> /data/data/com.termux/files/home/storage/downloads/
 Pour transformer une app web en APK :
 
 ```bash
-# dans le dossier du projet, côté Ubuntu :
+# dans le dossier du projet, côté Debian :
 npm install
 npx cap sync android
 bash ~/android-build-tools/build-android-local.sh ./android
@@ -177,11 +196,14 @@ bash ~/android-build-tools/build-android-local.sh ./android
 [APKforge](https://github.com/Pandarte/forge).
 
 ```bash
-proot-distro login ubuntu
 python3 ~/buildserver/buildserver.py        # ou : bash start-build-server.sh
 ```
 
-### Build Termux-natif (sans proot, compileSdk ≤ 34)
+Le serveur tourne **dans Termux**. Il pilote directement la chaîne native et,
+uniquement sur un échec natif lié à la chaîne, provisionne puis utilise le
+secours Debian + qemu (voir *Deux chaînes* plus haut).
+
+### Build Termux-natif (voie par défaut)
 
 Pour les projets en compileSdk 34 ou moins, on compile en natif dans Termux —
 pas de proot, pas de qemu, pleine vitesse native. À lancer **depuis Termux**
@@ -258,7 +280,8 @@ relancer le setup.
 | `detect-project.sh`      | détecte le type de projet (Flutter/Capacitor/RN/natif)      |
 | `patch-gradle-cache.sh`  | injecte le shim dans le jar aapt2 du cache Gradle           |
 | `setup-node.sh`          | installe Node.js / npm pour les projets web                 |
-| `setup-termux-native.sh` | installe la chaîne Termux-native (sans proot, compileSdk ≤ 34) |
+| `setup-termux-native.sh` | installe la chaîne native (défaut : JDK, SDK, aapt2 natif) |
+| `bootstrap-debian-build.sh` | installe le proot Debian minimal de secours + la chaîne qemu |
 | `build-termux-native.sh` | compile en natif dans Termux (sans proot/qemu)              |
 | `lib-i18n.sh`            | messages de logs bilingues (EN par défaut, FR via `ABT_LANG`) |
 | `buildserver.py`         | API HTTP locale, back-end de l'app APKforge                 |
@@ -266,10 +289,12 @@ relancer le setup.
 
 ## Performances et limites
 
-C'est un montage à plusieurs couches (Termux → proot → qemu → shim → cache
-Gradle). C'est fonctionnel mais **plus lent qu'un build natif** (qemu émule
-chaque instruction d'aapt2) et plus fragile qu'un build cloud. Pour un usage
-rapide et fiable, GitHub Actions reste l'option de référence. Cette chaîne
+La voie **native** (aapt2 ARM de Termux) est la norme et tourne à pleine
+vitesse. Le **secours** est un montage à plusieurs couches (Termux → proot →
+qemu → shim → cache Gradle) : fonctionnel, mais qemu émule chaque instruction
+d'aapt2, donc plus lent et plus fragile. Il n'intervient que lorsque le
+compileSdk du projet dépasse ce que l'aapt2 Termux sait lire. Pour une CI rapide
+et fiable, GitHub Actions reste l'option de référence ; cette boîte à outils
 existe pour compiler **100 % en local**, y compris hors connexion.
 
 ## Projets liés
