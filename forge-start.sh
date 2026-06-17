@@ -22,6 +22,46 @@ SERVER="$SERVER_DIR/buildserver.py"
 NATIVE_AAPT2="$HOME_DIR/android-sdk/build-tools/35.0.0/aapt2"
 DEBIAN_ROOT="$PREFIX/var/lib/proot-distro/containers/debian"
 
+# --- Auto-mise a jour du depot (silencieuse) ---------------------------------
+# Au demarrage, on verifie si android-build-tools est a jour. Si une version
+# distante existe ET que l'arbre local est propre (aucune modif non commitee),
+# on pull (fast-forward) puis on RE-EXEC ce script a jour. Le re-exec est
+# indispensable : bash lit le fichier au fil de l'execution, donc le modifier en
+# cours de route corromprait le run. Le garde APKFORGE_SELF_UPDATED evite toute
+# boucle (on ne tente la MAJ qu'une fois par lancement).
+if [ -z "${APKFORGE_SELF_UPDATED:-}" ] && command -v git >/dev/null 2>&1 \
+   && [ -d "$TOOLS/.git" ]; then
+    did_update=0
+    if cd "$TOOLS" 2>/dev/null; then
+        # Fetch leger et borne dans le temps (ne bloque pas si reseau lent/absent).
+        if timeout 15 git fetch --quiet origin 2>/dev/null; then
+            branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
+            local_rev="$(git rev-parse HEAD 2>/dev/null || echo '')"
+            remote_rev="$(git rev-parse "origin/$branch" 2>/dev/null || echo '')"
+
+            if [ -n "$branch" ] && [ -n "$remote_rev" ] \
+               && [ "$local_rev" != "$remote_rev" ]; then
+                # En retard sur le distant. On ne pull QUE si l'arbre est propre.
+                if git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null; then
+                    if git merge --ff-only --quiet "origin/$branch" 2>/dev/null; then
+                        did_update=1
+                    fi
+                else
+                    echo "-- MAJ dispo, mais modifs locales non commitees : pull ignore --" >&2
+                fi
+            fi
+        fi
+        cd "$HOME_DIR" 2>/dev/null || true
+    fi
+
+    if [ "$did_update" = 1 ]; then
+        echo "-- depot mis a jour -> relance du script --"
+        export APKFORGE_SELF_UPDATED=1
+        exec bash "$TOOLS/forge-start.sh" "$@"
+    fi
+fi
+
+
 # --- Verifie qu'au moins une chaine est presente -----------------------------
 native_ready=0
 proot_ready=0
