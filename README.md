@@ -7,7 +7,7 @@
 This toolkit builds **any Android/Gradle project** (native Android, Capacitor,
 React Native, Flutter) directly on an ARM phone. It also ships a small HTTP
 server that acts as the back-end for the
-[APKforge](https://github.com/Pandarte/APKforge) app.
+[APKforge](https://github.com/lonelykonny/APKforge) app.
 
 <p align="left">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Termux%20%2F%20Android%20ARM-3DDC84">
@@ -188,7 +188,7 @@ bash ~/android-build-tools/build-android-local.sh ./android
 
 `buildserver.py` exposes the chain via a small local HTTP API
 (`127.0.0.1:8765`), driven by the
-[APKforge](https://github.com/Pandarte/APKforge) app.
+[APKforge](https://github.com/lonelykonny/APKforge) app.
 
 ```bash
 python3 ~/buildserver/buildserver.py        # or: bash start-build-server.sh
@@ -311,5 +311,5 @@ goes to lzhiyong.
 
 ## Related projects
 
-- [APKforge](https://github.com/Pandarte/APKforge) — the Android interface that
+- [APKforge](https://github.com/lonelykonny/APKforge) — the Android interface that
   drives this chain through the HTTP server.
