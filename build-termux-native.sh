@@ -81,6 +81,42 @@ if [ ! -f "$PROJECT_DIR/gradlew" ]; then
 fi
 echo "sdk.dir=$ANDROID_HOME" > "$PROJECT_DIR/local.properties"
 
+# --- 2bis. Purge du cache Gradle si > 10 Go ----------------------------------
+GRADLE_CACHE_DIR="$HOME_DIR/.gradle/caches"
+GRADLE_CACHE_LIMIT_KB=$((10 * 1024 * 1024))  # 10 Go en Ko
+if [ -d "$GRADLE_CACHE_DIR" ]; then
+  CACHE_SIZE_KB="$(du -sk "$GRADLE_CACHE_DIR" 2>/dev/null | cut -f1)"
+  if [ -n "$CACHE_SIZE_KB" ] && [ "$CACHE_SIZE_KB" -gt "$GRADLE_CACHE_LIMIT_KB" ]; then
+    CACHE_SIZE_HUMAN="$(du -sh "$GRADLE_CACHE_DIR" 2>/dev/null | cut -f1)"
+    echo "[cache] Gradle cache = $CACHE_SIZE_HUMAN (> 10 Go) -> purge"
+    rm -rf "$GRADLE_CACHE_DIR"
+  fi
+fi
+
+# --- 2bis. Purge du cache Gradle si > 10 Go ----------------------------------
+GRADLE_CACHE_DIR="$HOME_DIR/.gradle/caches"
+GRADLE_CACHE_LIMIT_KB=$((10 * 1024 * 1024))  # 10 Go en Ko
+if [ -d "$GRADLE_CACHE_DIR" ]; then
+  CACHE_SIZE_KB="$(du -sk "$GRADLE_CACHE_DIR" 2>/dev/null | cut -f1)"
+  if [ -n "$CACHE_SIZE_KB" ] && [ "$CACHE_SIZE_KB" -gt "$GRADLE_CACHE_LIMIT_KB" ]; then
+    CACHE_SIZE_HUMAN="$(du -sh "$GRADLE_CACHE_DIR" 2>/dev/null | cut -f1)"
+    echo "[cache] Gradle cache = $CACHE_SIZE_HUMAN (> 10 Go) -> purge"
+    rm -rf "$GRADLE_CACHE_DIR"
+  fi
+fi
+
+# --- 2bis. Purge du cache Gradle si > 10 Go ----------------------------------
+GRADLE_CACHE_DIR="$HOME_DIR/.gradle/caches"
+GRADLE_CACHE_LIMIT_KB=$((10 * 1024 * 1024))  # 10 Go en Ko
+if [ -d "$GRADLE_CACHE_DIR" ]; then
+  CACHE_SIZE_KB="$(du -sk "$GRADLE_CACHE_DIR" 2>/dev/null | cut -f1)"
+  if [ -n "$CACHE_SIZE_KB" ] && [ "$CACHE_SIZE_KB" -gt "$GRADLE_CACHE_LIMIT_KB" ]; then
+    CACHE_SIZE_HUMAN="$(du -sh "$GRADLE_CACHE_DIR" 2>/dev/null | cut -f1)"
+    echo "[cache] Gradle cache = $CACHE_SIZE_HUMAN (> 10 Go) -> purge"
+    rm -rf "$GRADLE_CACHE_DIR"
+  fi
+fi
+
 # --- 3. Build natif ----------------------------------------------------------
 printf "$(t build_step)\n" "$TASK" "$PROJECT_DIR"
 cd "$PROJECT_DIR"
