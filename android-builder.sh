@@ -8,7 +8,7 @@
 #   android-builder.sh <url-git> [--branch <nom>] [--subdir <chemin>] [--task <tache>]
 #
 # Exemples :
-#   android-builder.sh https://github.com/Pandarte/souffle-app
+#   android-builder.sh https://github.com/lonelykonny/souffle-app
 #   android-builder.sh https://github.com/x/y --branch dev --task assembleRelease
 #   android-builder.sh https://github.com/x/monorepo --subdir apps/mobile
 #
