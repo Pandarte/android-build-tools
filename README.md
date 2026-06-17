@@ -11,7 +11,7 @@ server that acts as the back-end for the
 
 <p align="left">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Termux%20%2F%20Android%20ARM-3DDC84">
-  <img alt="Method" src="https://img.shields.io/badge/aapt2-native%20ARM%20%2B%20qemu%20fallback-orange">
+  <img alt="Method" src="https://img.shields.io/badge/aapt2-native%20ARM%20(lzhiyong)-3DDC84">
   <img alt="Shell" src="https://img.shields.io/badge/shell-bash-4EAA25">
   <img alt="Server" src="https://img.shields.io/badge/server-python3-3776AB">
 </p>
@@ -25,7 +25,7 @@ the **proot + qemu** chain is a fallback, installed and used only when needed.
 
 | Chain | Scripts | aapt2 | Speed | Role |
 |-------|---------|-------|-------|------|
-| **Termux-native** | `setup-termux-native.sh`, `build-termux-native.sh` | Termux ARM aapt2 (native) | fast (native) | **default** — every build starts here |
+| **Termux-native** | `setup-termux-native.sh`, `build-termux-native.sh` | lzhiyong ARM aapt2 (native) | fast (native) | **default** — every build starts here |
 | **proot + qemu** | `bootstrap-debian-build.sh`, `setup-aapt2-qemu.sh`, `android-builder.sh`, `build-android-local.sh` | Google x86 via qemu (in a Debian proot) | slower (emulated) | **fallback** — only if native fails for a toolchain reason |
 
 How the server arbitrates (`buildserver.py`):
@@ -35,49 +35,49 @@ How the server arbitrates (`buildserver.py`):
 3. If it fails, the server checks **why**. A project error (Kotlin error, missing
    symbol…) is reported as-is — the proot wouldn't fix it, so no fallback.
 4. If the failure is tied to the **toolchain** (e.g. `failed to load include
-   path .../android.jar` because the Termux aapt2 is too old for the project's
+   path .../android.jar` because the native toolchain can't satisfy the project's
    compileSdk), the server falls back to the proot + qemu chain. If no proot is
    installed yet, it **installs Debian on demand** (`bootstrap-debian-build.sh`)
    and retries there.
 
 Why a fallback at all? Gradle needs `aapt2` to read the target API's
-`android.jar`. The aapt2 packaged by Termux is a **native ARM binary** (fast, no
-emulation) but is built on an older Android base, so it can only read
-`android.jar` up to roughly API 34. Projects requiring **compileSdk 35+** (e.g.
-`androidx.activity` ≥ 1.10 or Material 3 Expressive) can't be read by the Termux
-aapt2. For those, the only option on ARM is Google's recent x86 aapt2 run through
-qemu — hence the proot chain.
+`android.jar`. The native ARM `aapt2` used here comes from
+[lzhiyong](https://github.com/lzhiyong/termux-ndk) — recompiled from AOSP for
+aarch64 — and reads recent `android.jar` files (API 35/36), which is why most
+projects, even recent-SDK ones, build **natively** with no emulation. The proot
++ qemu chain remains only for the rare edge cases where a project's toolchain
+can't be satisfied natively (very specific AGP/aapt2 version pinning, or tools
+not yet available as aarch64 builds).
 
-**Net effect:** simple/older projects build fast and natively, and never touch
-a proot. Recent-SDK projects start native, hit the aapt2 wall, and the server
-transparently provisions and uses the Debian + qemu fallback. The day Termux
-updates its aapt2 to a newer Android base, the native chain will cover recent
-SDKs too and the proot can be retired entirely.
+**Net effect:** in practice nearly everything builds fast and natively, and
+never touches a proot. The Debian + qemu fallback exists as a safety net and is
+provisioned on demand only if a native build fails for a toolchain reason.
 
 ## The problem it solves
 
-Gradle needs the **aapt2** tool to compile Android resources. On an ARM phone,
-you hit three walls:
+Gradle needs the **aapt2** tool to compile Android resources, and on a non-rooted
+ARM phone there's no official aarch64 build of the recent Android build-tools.
 
-1. The aapt2 shipped by Termux is **too old**: it can't read the `android.jar`
-   of recent APIs (35, 36) → `LoadedArsc.cpp ... entry offsets overlap` error.
-2. The aapt2 from Debian/Ubuntu (`apt install aapt`) runs on ARM but is also too
-   old (2.19) → same error on recent jars.
-3. Google's **recent** aapt2 only exists for **x86** (no `linux-aarch64` build)
-   → `Exec format error` on ARM.
+**The native solution (default):** this toolkit uses **aarch64 build-tools
+recompiled from AOSP by [lzhiyong](https://github.com/lzhiyong)** — a real native
+ARM `aapt2` (and `aidl`, `zipalign`, etc.) that runs at full speed with no
+emulation and reads recent `android.jar` files. `setup-termux-native.sh`
+downloads them and points Gradle at the native `aapt2` via
+`android.aapt2FromMavenOverride`. This is what every build uses.
 
-**The solution**: run the **recent x86 aapt2** through **qemu** (x86 emulation on
-ARM). Two subtleties:
+**The fallback solution (qemu, legacy):** before the native build-tools were
+available, the only way to get a recent `aapt2` on ARM was to run Google's **x86**
+binary through **qemu**. That chain is still shipped as a safety net. Two
+subtleties make it work:
 
 - `binfmt_misc` (transparent x86 execution) is **absent** on non-rooted Android,
   so you can't just "run" the x86 binary — you must call qemu explicitly.
 - Gradle **refuses a shell script** as aapt2 (it requires a real ELF binary). The
   workaround is a **shim**: a tiny native ARM ELF binary that does nothing but
-  re-launch `qemu + aapt2-x86`. That shim is then **injected into the aapt2 .jar
-  that Gradle keeps in its cache**, which bypasses the strict validation of the
-  `aapt2FromMavenOverride` option.
+  re-launch `qemu + aapt2-x86`, injected into the aapt2 `.jar` that Gradle keeps
+  in its cache.
 
-Full chain:
+Fallback chain:
 
 ```
 Gradle ──▶ (cache) aapt2 = SHIM (ARM ELF) ──▶ qemu-x86_64 ──▶ recent x86 aapt2 ──▶ reads android.jar
@@ -93,9 +93,12 @@ Everything is driven from **Termux** (no proot needed for normal use).
 bash ~/android-build-tools/setup-termux-native.sh
 ```
 
-This installs the JDK, the Android SDK and the **native ARM aapt2**, and points
-Gradle at it. It is idempotent. After this you can build any project whose
-compileSdk the Termux aapt2 supports (≈ API 34 and below).
+This installs the JDK, the **aarch64 Android SDK** (native ARM `aapt2` +
+platforms, from [lzhiyong/termux-ndk](https://github.com/lzhiyong/termux-ndk)),
+patches any x86 build-tools binaries to their native ARM equivalents (from
+[lzhiyong/android-sdk-tools](https://github.com/lzhiyong/android-sdk-tools)), and
+points Gradle at the native `aapt2`. It is idempotent. After this you can build
+essentially any project, including recent compileSdk.
 
 **Debian fallback (optional, on demand):**
 
@@ -205,12 +208,13 @@ bash ~/android-build-tools/setup-termux-native.sh                 # one time
 bash ~/android-build-tools/build-termux-native.sh <git-url|path>  # build
 ```
 
-`setup-termux-native.sh` installs the JDK, the Android SDK and the **Termux
-native ARM aapt2** (`pkg install aapt2`), and points Gradle at it via
-`android.aapt2FromMavenOverride`. It verifies the binary actually runs (no
-`Exec format error`). If the build later fails with `failed to load include path
-.../android.jar`, the project's compileSdk is too recent for the Termux aapt2 —
-use the proot+qemu chain instead.
+`setup-termux-native.sh` installs the JDK, the **aarch64 Android SDK** and the
+**native ARM aapt2** (from [lzhiyong/termux-ndk](https://github.com/lzhiyong/termux-ndk),
+with build-tools binaries from
+[lzhiyong/android-sdk-tools](https://github.com/lzhiyong/android-sdk-tools)), and
+points Gradle at it via `android.aapt2FromMavenOverride`. It verifies the binary
+actually runs (no `Exec format error`). This native chain handles recent
+compileSdk, so it's the path used for essentially every build.
 
 ## Troubleshooting
 
@@ -279,12 +283,31 @@ project's AGP to 8.13, or edit `AAPT2_VERSION` in `setup-aapt2-qemu.sh` and the
 
 ## Performance and limits
 
-The **native** path (Termux ARM aapt2) is the norm and runs at full speed. The
+The **native** path (lzhiyong ARM aapt2) is the norm and runs at full speed. The
 **fallback** is a multi-layer stack (Termux → proot → qemu → shim → Gradle
 cache): it works, but qemu emulates every aapt2 instruction, so it's slower and
-more fragile. It only kicks in when the project's compileSdk outruns the Termux
-aapt2. For fast, reliable CI, GitHub Actions remains the reference option; this
+more fragile. It only kicks in in the rare cases where the native toolchain
+can't satisfy a project. For fast, reliable CI, GitHub Actions remains the
+reference option; this
 toolkit exists to build **100% locally**, including offline.
+
+## Credits
+
+The native build chain is only possible thanks to **[lzhiyong](https://github.com/lzhiyong)**,
+who recompiles the Android SDK tools from AOSP for aarch64. This toolkit
+downloads and uses their prebuilt binaries directly:
+
+- **[lzhiyong/termux-ndk](https://github.com/lzhiyong/termux-ndk)** — the
+  aarch64 Android SDK archive (`android-sdk-aarch64.7z`): native ARM `aapt2` +
+  the Android platforms. This is the core of the native chain.
+- **[lzhiyong/android-sdk-tools](https://github.com/lzhiyong/android-sdk-tools)**
+  — statically-linked aarch64 build-tools (`aidl`, `zipalign`, `aapt`,
+  `split-select`, …) used to patch any x86 binaries the SDK would otherwise
+  install. Built from AOSP; currently up to release `35.0.2`.
+
+Without these, building Android APKs natively on a non-rooted ARM phone wouldn't
+be practical. All credit for the hard part — porting the build-tools to ARM —
+goes to lzhiyong.
 
 ## Related projects
 

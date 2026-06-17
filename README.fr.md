@@ -12,7 +12,7 @@ fournit aussi un petit serveur HTTP qui sert de back-end à l'application
 
 <p align="left">
   <img alt="Plateforme" src="https://img.shields.io/badge/plateforme-Termux%20%2F%20Android%20ARM-3DDC84">
-  <img alt="Méthode" src="https://img.shields.io/badge/aapt2-x86%20via%20qemu-orange">
+  <img alt="Méthode" src="https://img.shields.io/badge/aapt2-ARM%20natif%20(lzhiyong)-3DDC84">
   <img alt="Shell" src="https://img.shields.io/badge/shell-bash-4EAA25">
   <img alt="Serveur" src="https://img.shields.io/badge/serveur-python3-3776AB">
 </p>
@@ -27,7 +27,7 @@ utilisé seulement en cas de besoin.
 
 | Chaîne | Scripts | aapt2 | Vitesse | Rôle |
 |--------|---------|-------|---------|------|
-| **Termux-native** | `setup-termux-native.sh`, `build-termux-native.sh` | aapt2 ARM de Termux (natif) | rapide (natif) | **par défaut** — chaque build démarre ici |
+| **Termux-native** | `setup-termux-native.sh`, `build-termux-native.sh` | aapt2 ARM lzhiyong (natif) | rapide (natif) | **par défaut** — chaque build démarre ici |
 | **proot + qemu** | `bootstrap-debian-build.sh`, `setup-aapt2-qemu.sh`, `android-builder.sh`, `build-android-local.sh` | aapt2 x86 de Google via qemu (proot Debian) | plus lente (émulée) | **secours** — seulement si le natif échoue pour une raison de chaîne |
 
 Comment le serveur arbitre (`buildserver.py`) :
@@ -38,51 +38,53 @@ Comment le serveur arbitre (`buildserver.py`) :
    Kotlin, symbole manquant…) est rapportée telle quelle — le proot n'y
    changerait rien, donc pas de bascule.
 4. Si l'échec est lié à la **chaîne** (p. ex. `failed to load include path
-   .../android.jar` parce que l'aapt2 Termux est trop ancien pour le compileSdk
+   .../android.jar` parce que la toolchain native ne peut pas satisfaire le compileSdk
    du projet), le serveur bascule sur la chaîne proot + qemu. Si aucun proot
    n'est encore installé, il **installe Debian à la demande**
    (`bootstrap-debian-build.sh`) puis réessaie dedans.
 
 Pourquoi un secours ? Gradle a besoin d'`aapt2` pour lire l'`android.jar` de
-l'API ciblée. L'aapt2 fourni par Termux est un **binaire ARM natif** (rapide,
-sans émulation) mais construit sur une base Android plus ancienne : il ne lit
-l'`android.jar` que jusqu'à l'API 34 environ. Les projets en **compileSdk 35+**
-(p. ex. `androidx.activity` ≥ 1.10 ou Material 3 Expressive) ne peuvent pas être
-lus par l'aapt2 Termux. Pour ceux-là, la seule option sur ARM est l'aapt2 x86
-récent de Google passé par qemu — d'où la chaîne proot.
+l'API ciblée. L'aapt2 ARM natif utilisé ici provient de
+[lzhiyong](https://github.com/lzhiyong/termux-ndk) — recompilé depuis l'AOSP pour
+aarch64 — et lit les `android.jar` récents (API 35/36), ce qui fait que la
+plupart des projets, même en SDK récent, compilent en **natif** sans émulation.
+La chaîne proot + qemu ne reste que pour les rares cas limites où la toolchain
+d'un projet ne peut pas être satisfaite nativement (épinglage très précis d'une
+version d'AGP/aapt2, ou outils pas encore disponibles en build aarch64).
 
-**Effet net :** les projets simples ou anciens compilent vite, en natif, sans
-jamais toucher de proot. Les projets en SDK récent démarrent en natif, butent
-sur le mur de l'aapt2, et le serveur provisionne puis utilise le secours
-Debian + qemu de façon transparente. Le jour où Termux met à jour son aapt2 vers
-une base Android plus récente, la chaîne native couvrira aussi les SDK récents
-et le proot pourra être abandonné totalement.
+**Effet net :** en pratique, presque tout compile vite et en natif, sans jamais
+toucher de proot. Le secours Debian + qemu existe comme filet de sécurité et
+n'est provisionné à la demande que si un build natif échoue pour une raison liée
+à la chaîne.
 
 ## Le problème résolu
 
-Gradle a besoin de l'outil **aapt2** pour compiler les ressources Android. Sur un
-téléphone ARM, on se heurte à trois murs :
+Gradle a besoin de l'outil **aapt2** pour compiler les ressources Android, et sur
+un téléphone ARM non-rooté il n'existe pas de build officiel aarch64 des
+build-tools Android récents.
 
-1. L'aapt2 fourni par Termux est **trop vieux** : il ne lit pas l'`android.jar`
-   des API récentes (35, 36) → erreur `LoadedArsc.cpp ... entry offsets overlap`.
-2. L'aapt2 de Debian/Ubuntu (`apt install aapt`) tourne sur ARM mais est lui
-   aussi trop ancien (2.19) → même erreur sur les jar récents.
-3. L'aapt2 **récent** de Google n'existe **que pour x86** (pas de build
-   `linux-aarch64`) → `Exec format error` sur ARM.
+**La solution native (par défaut) :** cette boîte à outils utilise des
+**build-tools aarch64 recompilés depuis l'AOSP par
+[lzhiyong](https://github.com/lzhiyong)** — un vrai `aapt2` ARM natif (ainsi que
+`aidl`, `zipalign`, etc.) qui tourne à pleine vitesse sans émulation et lit les
+`android.jar` récents. `setup-termux-native.sh` les télécharge et configure
+Gradle pour utiliser l'`aapt2` natif via `android.aapt2FromMavenOverride`. C'est
+ce qu'utilise chaque build.
 
-**La solution** : exécuter l'aapt2 **x86 récent** via **qemu** (émulation x86 sur
-ARM). Avec deux subtilités :
+**La solution de secours (qemu, historique) :** avant que ces build-tools natifs
+ne soient disponibles, la seule façon d'avoir un `aapt2` récent sur ARM était
+d'exécuter le binaire **x86** de Google via **qemu**. Cette chaîne est conservée
+comme filet de sécurité. Deux subtilités la font fonctionner :
 
 - `binfmt_misc` (exécution x86 transparente) est **absent** sur Android non-root :
   on ne peut pas simplement « lancer » le binaire x86, il faut appeler qemu
   explicitement.
 - Gradle **refuse un script shell** comme aapt2 (il exige un vrai binaire ELF).
   On contourne avec un **shim** : un minuscule binaire ELF natif ARM qui ne fait
-  que relancer `qemu + aapt2-x86`. Ce shim est ensuite **injecté dans le .jar
-  aapt2 que Gradle conserve en cache**, ce qui évite la validation stricte de
-  l'option `aapt2FromMavenOverride`.
+  que relancer `qemu + aapt2-x86`, injecté dans le `.jar` aapt2 que Gradle
+  conserve en cache.
 
-Chaîne complète :
+Chaîne de secours :
 
 ```
 Gradle ──▶ (cache) aapt2 = SHIM (ELF ARM) ──▶ qemu-x86_64 ──▶ aapt2 x86 récent ──▶ lit android.jar
@@ -98,9 +100,12 @@ Tout se pilote depuis **Termux** (aucun proot nécessaire en usage normal).
 bash ~/android-build-tools/setup-termux-native.sh
 ```
 
-Ceci installe le JDK, le SDK Android et l'**aapt2 ARM natif**, et configure
-Gradle pour l'utiliser. Idempotent. Après ça, tu peux compiler tout projet dont
-le compileSdk est supporté par l'aapt2 Termux (≈ API 34 et en dessous).
+Ceci installe le JDK, le **SDK Android aarch64** (aapt2 ARM natif + plateformes,
+depuis [lzhiyong/termux-ndk](https://github.com/lzhiyong/termux-ndk)), remplace
+les éventuels binaires build-tools x86 par leurs équivalents ARM natifs (depuis
+[lzhiyong/android-sdk-tools](https://github.com/lzhiyong/android-sdk-tools)), et
+configure Gradle pour utiliser l'`aapt2` natif. Idempotent. Après ça, tu peux
+compiler quasiment tout projet, y compris en compileSdk récent.
 
 **Secours Debian (optionnel, à la demande) :**
 
@@ -205,21 +210,22 @@ secours Debian + qemu (voir *Deux chaînes* plus haut).
 
 ### Build Termux-natif (voie par défaut)
 
-Pour les projets en compileSdk 34 ou moins, on compile en natif dans Termux —
-pas de proot, pas de qemu, pleine vitesse native. À lancer **depuis Termux**
-(pas dans le proot) :
+Pour quasiment tous les projets, y compris en compileSdk récent, on compile en
+natif dans Termux — pas de proot, pas de qemu, pleine vitesse native. À lancer
+**depuis Termux** (pas dans le proot) :
 
 ```bash
 bash ~/android-build-tools/setup-termux-native.sh                 # une fois
 bash ~/android-build-tools/build-termux-native.sh <url-git|chemin>  # build
 ```
 
-`setup-termux-native.sh` installe le JDK, le SDK Android et l'**aapt2 ARM natif
-de Termux** (`pkg install aapt2`), et pointe Gradle dessus via
-`android.aapt2FromMavenOverride`. Il vérifie que le binaire s'exécute vraiment
-(pas d'`Exec format error`). Si le build échoue ensuite avec `failed to load
-include path .../android.jar`, c'est que le compileSdk du projet est trop récent
-pour l'aapt2 Termux — utilise alors la chaîne proot+qemu.
+`setup-termux-native.sh` installe le JDK, le **SDK Android aarch64** et l'**aapt2
+ARM natif** (depuis [lzhiyong/termux-ndk](https://github.com/lzhiyong/termux-ndk),
+avec les build-tools de
+[lzhiyong/android-sdk-tools](https://github.com/lzhiyong/android-sdk-tools)), et
+pointe Gradle dessus via `android.aapt2FromMavenOverride`. Il vérifie que le
+binaire s'exécute vraiment (pas d'`Exec format error`). Cette chaîne native gère
+le compileSdk récent, c'est donc la voie utilisée pour quasiment chaque build.
 
 ## Dépannage
 
@@ -289,13 +295,33 @@ relancer le setup.
 
 ## Performances et limites
 
-La voie **native** (aapt2 ARM de Termux) est la norme et tourne à pleine
+La voie **native** (aapt2 ARM lzhiyong) est la norme et tourne à pleine
 vitesse. Le **secours** est un montage à plusieurs couches (Termux → proot →
 qemu → shim → cache Gradle) : fonctionnel, mais qemu émule chaque instruction
-d'aapt2, donc plus lent et plus fragile. Il n'intervient que lorsque le
-compileSdk du projet dépasse ce que l'aapt2 Termux sait lire. Pour une CI rapide
+d'aapt2, donc plus lent et plus fragile. Il n'intervient que dans les rares cas
+où la toolchain native ne peut pas satisfaire un projet. Pour une CI rapide
 et fiable, GitHub Actions reste l'option de référence ; cette boîte à outils
 existe pour compiler **100 % en local**, y compris hors connexion.
+
+## Crédits
+
+La chaîne de build native n'est possible que grâce à
+**[lzhiyong](https://github.com/lzhiyong)**, qui recompile les outils du SDK
+Android depuis l'AOSP pour aarch64. Cette boîte à outils télécharge et utilise
+directement ses binaires précompilés :
+
+- **[lzhiyong/termux-ndk](https://github.com/lzhiyong/termux-ndk)** — l'archive
+  du SDK Android aarch64 (`android-sdk-aarch64.7z`) : `aapt2` ARM natif + les
+  plateformes Android. C'est le cœur de la chaîne native.
+- **[lzhiyong/android-sdk-tools](https://github.com/lzhiyong/android-sdk-tools)**
+  — les build-tools aarch64 liés statiquement (`aidl`, `zipalign`, `aapt`,
+  `split-select`, …), utilisés pour remplacer les éventuels binaires x86 que le
+  SDK installerait. Compilés depuis l'AOSP ; à ce jour jusqu'à la release
+  `35.0.2`.
+
+Sans ça, compiler des APK Android en natif sur un téléphone ARM non-rooté ne
+serait pas praticable. Tout le mérite de la partie difficile — porter les
+build-tools sur ARM — revient à lzhiyong.
 
 ## Projets liés
 
